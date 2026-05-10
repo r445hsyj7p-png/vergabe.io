@@ -4,6 +4,14 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import dateparser
 
+_KW_CACHE: dict = {}
+
+
+def _keyword_pattern(keyword: str) -> re.Pattern:
+    if keyword not in _KW_CACHE:
+        _KW_CACHE[keyword] = re.compile(r'\b' + re.escape(keyword) + r'\b', re.IGNORECASE)
+    return _KW_CACHE[keyword]
+
 
 # IT category mapping: CPV prefix → category
 CPV_CATEGORY_MAP = {
@@ -33,8 +41,8 @@ CPV_CATEGORY_MAP = {
 KEYWORD_CATEGORY_MAP = {
     "Cybersecurity": ["siem", "soc", "mdr", "xdr", "edr", "cybersecurity", "sicherheit", "firewall", "penetration", "ztna", "iam", "identity"],
     "Cloud Services": ["cloud", "iaas", "paas", "saas", "azure", "aws", "kubernetes", "docker", "migration"],
-    "Data / AI": ["data", "daten", "ki", "ai", "machine learning", "analytics", "bi ", "business intelligence", "datenbank"],
-    "Software Dev": ["entwicklung", "softwareentwicklung", "portal", "plattform", "anwendung", "app ", "api ", "agile", "devops"],
+    "Data / AI": ["data", "daten", "ki", "ai", "machine learning", "analytics", "bi", "business intelligence", "datenbank"],
+    "Software Dev": ["entwicklung", "softwareentwicklung", "portal", "plattform", "anwendung", "app", "api", "agile", "devops"],
     "IT Consulting": ["beratung", "consulting", "strategie", "digitalisierung", "transformation", "konzept"],
     "IT-Infrastruktur": ["infrastruktur", "netzwerk", "server", "hardware", "datacenter", "rechenzentrum", "backup"],
 }
@@ -88,11 +96,11 @@ def detect_it_category(title: str, description: str, cpv_codes: List[str]) -> Op
         if prefix in CPV_CATEGORY_MAP:
             return CPV_CATEGORY_MAP[prefix]
 
-    # Keyword-based
-    combined = f"{title} {description or ''}".lower()
+    # Keyword-based (word-boundary match, case-insensitive)
+    combined = f"{title} {description or ''}"
     for category, keywords in KEYWORD_CATEGORY_MAP.items():
         for kw in keywords:
-            if kw in combined:
+            if _keyword_pattern(kw).search(combined):
                 return category
 
     return None

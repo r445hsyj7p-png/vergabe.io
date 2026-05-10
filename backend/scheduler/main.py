@@ -7,10 +7,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from database import AsyncSessionLocal
-from models import Source
+from models import Source, CrawlLog
 
 
 async def get_source_id(slug: str):
@@ -18,6 +18,22 @@ async def get_source_id(slug: str):
         result = await db.execute(select(Source).where(Source.slug == slug))
         source = result.scalar_one_or_none()
         return source.id if source else None
+
+
+async def job_alert_engine():
+    from pipeline.alert_engine import run_alert_engine
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with AsyncSessionLocal() as db:
+        n = await run_alert_engine(db, since)
+        if n:
+            print(f"[AlertEngine] {n} new notifications")
+
+
+async def job_deadline_warnings():
+    from pipeline.alert_engine import run_deadline_warnings
+    async with AsyncSessionLocal() as db:
+        await run_deadline_warnings(db)
+    print("[DeadlineWarnings] Done")
 
 
 async def job_ted():
@@ -40,31 +56,40 @@ async def job_bund():
         await job_alert_engine()
 
 
-async def job_alert_engine():
-    from pipeline.alert_engine import run_alert_engine
-    since = datetime.now(timezone.utc) - timedelta(hours=1)
-    async with AsyncSessionLocal() as db:
-        n = await run_alert_engine(db, since)
-        if n:
-            print(f"[AlertEngine] {n} new notifications")
+# ── Kommunen-Pipeline ────────────────────────────────────────────────────
+
+async def job_destatis_sync():
+    """Quarterly: sync German municipality list from Destatis."""
+    print(f"[{datetime.now()}] Running Destatis sync…")
+    from crawler.komunen.destatis_sync import sync_from_destatis
+    await sync_from_destatis()
 
 
-async def job_deadline_warnings():
-    from pipeline.alert_engine import run_deadline_warnings
-    async with AsyncSessionLocal() as db:
-        await run_deadline_warnings(db)
-    print(f"[DeadlineWarnings] Done")
+async def job_wikidata_urls():
+    """Weekly: resolve main URLs for Gemeinden via Wikidata SPARQL."""
+    print(f"[{datetime.now()}] Running Wikidata URL resolution…")
+    from crawler.komunen.wikidata import resolve_wikidata_urls
+    await resolve_wikidata_urls()
+
+
+async def job_komunen_verify():
+    """Daily: HTTP-verify komunen URLs and discover vergabe pages."""
+    print(f"[{datetime.now()}] Running Kommunen URL verify + discovery…")
+    from crawler.komunen.discovery import (
+        run_url_verify_job, run_discovery_job, run_maintenance_job
+    )
+    await run_url_verify_job()
+    await run_discovery_job()
+    await run_maintenance_job()
 
 
 async def check_and_run_initial_crawl():
     """If setup requested an initial crawl, run it now."""
-    from database import AsyncSessionLocal
-    from models import CrawlLog
-    from sqlalchemy import select, and_
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(CrawlLog).where(
-                and_(CrawlLog.message == "setup:initial_crawl_requested", CrawlLog.level == "info")
+                CrawlLog.message == "setup:initial_crawl_requested",
+                CrawlLog.level == "info",
             )
         )
         marker = result.scalar_one_or_none()
@@ -80,9 +105,6 @@ async def check_and_run_initial_crawl():
     await job_ted()
     await job_bund()
     print("[Scheduler] Initial crawl complete.")
-
-
-from sqlalchemy import func
 
 
 def main():
@@ -122,30 +144,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# ── Kommunen-Pipeline ────────────────────────────────────────────────────
-
-async def job_destatis_sync():
-    """Quarterly: sync German municipality list from Destatis."""
-    print(f"[{datetime.now()}] Running Destatis sync…")
-    from crawler.komunen.destatis_sync import sync_from_destatis
-    await sync_from_destatis()
-
-
-async def job_wikidata_urls():
-    """Weekly: resolve main URLs for Gemeinden via Wikidata SPARQL."""
-    print(f"[{datetime.now()}] Running Wikidata URL resolution…")
-    from crawler.komunen.wikidata import resolve_wikidata_urls
-    await resolve_wikidata_urls()
-
-
-async def job_komunen_verify():
-    """Daily: HTTP-verify komunen URLs and discover vergabe pages."""
-    print(f"[{datetime.now()}] Running Kommunen URL verify + discovery…")
-    from crawler.komunen.discovery import (
-        run_url_verify_job, run_discovery_job, run_maintenance_job
-    )
-    await run_url_verify_job()
-    await run_discovery_job()
-    await run_maintenance_job()

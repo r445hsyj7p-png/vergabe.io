@@ -91,6 +91,9 @@ async def run_ted_fetcher(source_id: uuid.UUID, since: Optional[datetime] = None
     new_count = 0
     total = 0
 
+    consecutive_errors = 0
+    max_consecutive_errors = 3
+
     async with httpx.AsyncClient(timeout=60) as client:
         page = 1
         while True:
@@ -105,9 +108,15 @@ async def run_ted_fetcher(source_id: uuid.UUID, since: Optional[datetime] = None
             }
             try:
                 data = await _fetch_page(client, params)
+                consecutive_errors = 0
             except Exception as e:
+                consecutive_errors += 1
                 await _log(source_id, "error", f"TED fetch error page {page}: {e}")
-                break
+                if consecutive_errors >= max_consecutive_errors:
+                    break
+                page += 1
+                await asyncio.sleep(2 ** consecutive_errors)
+                continue
 
             notices = data.get("notices", [])
             if not notices:
@@ -119,7 +128,6 @@ async def run_ted_fetcher(source_id: uuid.UUID, since: Optional[datetime] = None
                         normalized = _normalize_ted_notice(notice)
                         tender, is_new = await resolve(db, normalized, source_id)
                         if is_new:
-                            # Save lots
                             from models import Lot
                             for lot_data in normalized.lots:
                                 lot = Lot(tender_id=tender.id, **lot_data)
@@ -134,7 +142,7 @@ async def run_ted_fetcher(source_id: uuid.UUID, since: Optional[datetime] = None
             if page >= total_pages or page >= 20:  # max 20 pages / run
                 break
             page += 1
-            await asyncio.sleep(0.5)  # rate limiting
+            await asyncio.sleep(1.0)  # respectful rate limiting
 
     duration = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
     await _log(source_id, "info", f"TED: {total} processed, {new_count} new", total, new_count, duration)

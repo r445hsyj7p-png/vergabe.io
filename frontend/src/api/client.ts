@@ -27,7 +27,7 @@ api.interceptors.response.use(
 )
 
 export async function login(password: string) {
-  const r = await api.post(`/auth/token?password=${encodeURIComponent(password)}`)
+  const r = await api.post('/auth/token', { password })
   return r.data as { access_token: string; token_type: string }
 }
 

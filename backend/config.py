@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from typing import List
 import os
@@ -30,6 +31,15 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        if self.app_env == "production":
+            if self.secret_key in ("changeme", ""):
+                raise ValueError("SECRET_KEY must be set to a strong value in production")
+            if self.admin_password in ("admin", ""):
+                raise ValueError("ADMIN_PASSWORD must be set to a strong value in production")
+        return self
 
     @property
     def cors_origins_list(self) -> List[str]:

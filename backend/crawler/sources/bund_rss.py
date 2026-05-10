@@ -1,5 +1,6 @@
 """service.bund.de RSS fetcher"""
 import asyncio
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import feedparser
@@ -27,8 +28,11 @@ def _normalize_entry(entry: dict) -> NormalizedTender:
 
     # Description
     raw_desc = entry.get("summary", "") or entry.get("description", "")
-    soup = BeautifulSoup(raw_desc, "html.parser")
-    n.description = soup.get_text(separator="\n").strip()
+    try:
+        soup = BeautifulSoup(raw_desc, "lxml")
+        n.description = soup.get_text(separator="\n").strip()
+    except Exception:
+        n.description = re.sub(r"<[^>]+>", " ", raw_desc).strip()[:2000] if raw_desc else None
 
     # Extract authority from description
     for line in (n.description or "").split("\n"):
@@ -40,7 +44,6 @@ def _normalize_entry(entry: dict) -> NormalizedTender:
     n.cpv_codes = extract_cpv_from_text(n.description or "")
 
     # Deadline from description text
-    import re
     deadline_match = re.search(r"(\d{2}\.\d{2}\.\d{4})", n.description or "")
     if deadline_match:
         n.deadline = parse_date(deadline_match.group(1))

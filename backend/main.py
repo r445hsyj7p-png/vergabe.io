@@ -1,7 +1,8 @@
 """vergabe.io — FastAPI Backend"""
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from database import engine, Base
@@ -50,9 +51,13 @@ async def health():
     return {"status": "ok", "service": "vergabe.io"}
 
 
+class LoginRequest(BaseModel):
+    password: str
+
+
 @app.post("/auth/token")
-async def login(password: str):
-    if password == settings.admin_password:
-        return {"access_token": settings.secret_key, "token_type": "bearer"}
-    from fastapi import HTTPException
-    raise HTTPException(401, "Invalid password")
+async def login(body: LoginRequest):
+    if body.password != settings.admin_password:
+        raise HTTPException(401, "Invalid password")
+    from auth import create_access_token
+    return {"access_token": create_access_token(), "token_type": "bearer"}

@@ -1,4 +1,4 @@
-import type { TenderFilters } from '../types'
+import type { TenderFilters } from '../../types'
 
 interface Props {
   filters: TenderFilters

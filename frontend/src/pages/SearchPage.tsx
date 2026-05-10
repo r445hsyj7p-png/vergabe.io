@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { fetchTenders, exportUrl } from '../api/client'
 import type { Tender, TenderFilters, SearchProfile } from '../types'
 import { Topbar } from '../components/Topbar'
@@ -18,7 +18,7 @@ export function SearchPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['tenders', filters],
     queryFn: () => fetchTenders(filters),
-    keepPreviousData: true,
+    placeholderData: keepPreviousData,
   })
 
   const tenders = data?.items || []

@@ -41,19 +41,19 @@ export function DetailPanel({ tender, onClose, onNav, pos }: Props) {
     return <span style={{ fontFamily: 'var(--mono)', fontSize: 10, padding: '2px 8px', borderRadius: 4, background: bg, color, border: `0.5px solid ${border}` }}>{label}</span>
   }
 
-  function Field({ label, value }: { label: string; value?: string | null }) {
+  function Field({ label, value, color }: { label: string; value?: string | null; color?: string }) {
     if (!value) return null
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</div>
-        <div style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.35 }}>{value}</div>
+        <div style={{ fontSize: 12.5, color: color ?? 'var(--text)', lineHeight: 1.35 }}>{value}</div>
       </div>
     )
   }
 
   const deadline = d?.deadline ? new Date(d.deadline) : null
   const daysLeft = deadline ? Math.ceil((deadline.getTime() - Date.now()) / 86400000) : null
-  const deadlineColor = daysLeft != null && daysLeft <= 7 ? 'var(--red)' : daysLeft != null && daysLeft <= 14 ? 'var(--orange)' : 'var(--text)'
+  const deadlineColor = daysLeft != null && daysLeft <= 7 ? 'var(--red)' : daysLeft != null && daysLeft <= 14 ? 'var(--orange)' : 'var(--text2)'
 
   return (
     <div style={{
@@ -123,7 +123,7 @@ export function DetailPanel({ tender, onClose, onNav, pos }: Props) {
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Fristen & Eckdaten</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <Field label="Angebotsfrist" value={deadline ? `${deadline.toLocaleDateString('de-DE')}${daysLeft != null ? ` (${daysLeft}T)` : ''}` : null} />
+            <Field label="Angebotsfrist" value={deadline ? `${deadline.toLocaleDateString('de-DE')}${daysLeft != null ? ` (${daysLeft}T)` : ''}` : null} color={deadlineColor} />
             <Field label="Veröffentlicht" value={d?.publication_date ? new Date(d.publication_date).toLocaleDateString('de-DE') : null} />
             <Field label="Erfüllungsort" value={d?.fulfillment_location || tender.region || null} />
             <Field label="Volumen" value={fmt(tender.value_max, tender.currency) || undefined} />

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { setTag, removeTag } from '../../api/client'
-import type { Tender } from '../../types'
+import { setTag, removeTag } from '../api/client'
+import type { Tender } from '../types'
 
 interface RowProps {
   tender: Tender

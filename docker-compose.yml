@@ -1,0 +1,138 @@
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: vergabe
+      POSTGRES_PASSWORD: vergabe
+      POSTGRES_DB: vergabe
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vergabe"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── First-run setup (interactive admin creation + migrate + seed) ────────
+  setup:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - ./scripts:/scripts
+      - app_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # stdin_open + tty allow the password prompt to work in the terminal
+    stdin_open: true
+    tty: true
+    command: python /scripts/setup.py
+    restart: "no"
+
+  # ── Backend API ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./backend:/app
+      - app_data:/data
+      - ./scripts/entrypoint.sh:/entrypoint.sh
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  # ── Scheduler (crawls + alert engine) ───────────────────────────────────
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./backend:/app
+      - app_data:/data
+      - ./scripts/entrypoint.sh:/entrypoint.sh
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    command: python -m scheduler.main
+    restart: unless-stopped
+
+  # ── Kommunen Crawler ────────────────────────────────────────────────────
+  crawler:
+    build:
+      context: ./crawler
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    volumes:
+      - ./crawler:/app
+      - crawler_cache:/tmp/cache
+    restart: unless-stopped
+
+  # ── Frontend ─────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  crawler_cache:
+  app_data:          # persistent: stores admin.key + secret.key

@@ -11,4 +11,3 @@ tenacity==9.0.0
 pydantic-settings==2.6.1
 python-dotenv==1.0.1
 structlog==24.4.0
-advertools==0.13.6

@@ -1,5 +1,6 @@
 import csv
 import io
+import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.database import get_db
 from ..core.auth import require_auth
 from ..models import Tender, Tag, TenderSource, Source
-from ..schemas import TenderOut, TenderDetailOut, TenderPage, TagRequest
+from ..schemas import TenderOut, TenderDetailOut, TenderPage, TenderSourceOut, TagRequest
 
 router = APIRouter(prefix="/tenders", tags=["tenders"])
 
@@ -81,15 +82,7 @@ async def list_tenders(
     for t in rows:
         out = TenderOut.model_validate(t)
         out.tag_status = t.tags[0].status if t.tags else None
-        out.sources = [
-            type("TS", (), {
-                "source_id": ts.source_id,
-                "external_url": ts.external_url,
-                "platform_name": ts.source.name if ts.source else ts.platform_name,
-                "scraped_at": ts.scraped_at,
-            })()
-            for ts in t.sources
-        ]
+        out.sources = [TenderSourceOut.model_validate(ts) for ts in t.sources]
         items.append(out)
 
     return TenderPage(items=items, total=total, page=page, page_size=page_size, has_more=total > page * page_size)
@@ -131,7 +124,7 @@ async def export_tenders(
 
 @router.get("/{tender_id}", response_model=TenderDetailOut)
 async def get_tender(
-    tender_id: str,
+    tender_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
@@ -146,21 +139,13 @@ async def get_tender(
 
     out = TenderDetailOut.model_validate(t)
     out.tag_status = t.tags[0].status if t.tags else None
-    out.sources = [
-        type("TS", (), {
-            "source_id": ts.source_id,
-            "external_url": ts.external_url,
-            "platform_name": ts.source.name if ts.source else ts.platform_name,
-            "scraped_at": ts.scraped_at,
-        })()
-        for ts in t.sources
-    ]
+    out.sources = [TenderSourceOut.model_validate(ts) for ts in t.sources]
     return out
 
 
 @router.post("/{tender_id}/tags", status_code=204)
 async def set_tag(
-    tender_id: str,
+    tender_id: uuid.UUID,
     body: TagRequest,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
@@ -175,19 +160,19 @@ async def set_tag(
 
 @router.delete("/{tender_id}/tags", status_code=204)
 async def remove_tag(
-    tender_id: str,
+    tender_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
     tag = (await db.execute(select(Tag).where(Tag.tender_id == tender_id))).scalar_one_or_none()
     if tag:
-        await db.delete(tag)
+        db.delete(tag)
         await db.commit()
 
 
 @router.get("/{tender_id}/summary")
 async def get_summary_status(
-    tender_id: str,
+    tender_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
@@ -205,7 +190,7 @@ async def get_summary_status(
 
 @router.post("/{tender_id}/summary")
 async def generate_summary(
-    tender_id: str,
+    tender_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
@@ -218,7 +203,7 @@ async def generate_summary(
 
 @router.delete("/{tender_id}/summary", status_code=204)
 async def delete_summary(
-    tender_id: str,
+    tender_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
@@ -226,5 +211,5 @@ async def delete_summary(
 
     s = (await db.execute(select(TenderSummary).where(TenderSummary.tender_id == tender_id))).scalar_one_or_none()
     if s:
-        await db.delete(s)
+        db.delete(s)
         await db.commit()

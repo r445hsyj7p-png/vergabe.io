@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
@@ -34,7 +35,7 @@ async def list_notifications(
 
 
 @router.patch("/{notif_id}/read", status_code=204)
-async def mark_read(notif_id: str, db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
+async def mark_read(notif_id: uuid.UUID, db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
     await db.execute(update(Notification).where(Notification.id == notif_id).values(is_read=True))
     await db.commit()
 

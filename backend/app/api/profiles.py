@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,7 @@ async def create_profile(body: ProfileCreate, db: AsyncSession = Depends(get_db)
 
 
 @router.put("/{profile_id}", response_model=ProfileOut)
-async def update_profile(profile_id: str, body: ProfileCreate, db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
+async def update_profile(profile_id: uuid.UUID, body: ProfileCreate, db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
     p = (await db.execute(select(SearchProfile).where(SearchProfile.id == profile_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Profile not found")
@@ -38,9 +39,9 @@ async def update_profile(profile_id: str, body: ProfileCreate, db: AsyncSession 
 
 
 @router.delete("/{profile_id}", status_code=204)
-async def delete_profile(profile_id: str, db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
+async def delete_profile(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
     p = (await db.execute(select(SearchProfile).where(SearchProfile.id == profile_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Profile not found")
-    await db.delete(p)
+    db.delete(p)
     await db.commit()

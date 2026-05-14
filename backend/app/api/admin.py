@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, BackgroundTasks, Query
 from sqlalchemy import select, func
@@ -45,7 +46,7 @@ async def list_sources(db: AsyncSession = Depends(get_db), _: str = Depends(requ
 
 @router.post("/sources/{source_id}/crawl")
 async def trigger_crawl(
-    source_id: str,
+    source_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
@@ -108,7 +109,7 @@ async def komunen_queue(db: AsyncSession = Depends(get_db), _: str = Depends(req
 
 @router.patch("/komunen/{komunen_id}", response_model=KomunenOut)
 async def update_komunen(
-    komunen_id: str,
+    komunen_id: uuid.UUID,
     status: str = Query(...),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),

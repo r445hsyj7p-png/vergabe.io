@@ -25,7 +25,7 @@ async def generate_and_store(tender_id: str, db: AsyncSession) -> TenderSummary:
         select(TenderSummary).where(TenderSummary.tender_id == tender_id)
     )).scalar_one_or_none()
     if existing:
-        await db.delete(existing)
+        db.delete(existing)
         await db.flush()
 
     prompt = PROMPT.format(

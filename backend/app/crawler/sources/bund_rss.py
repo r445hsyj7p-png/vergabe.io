@@ -5,6 +5,7 @@ import httpx
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
@@ -43,7 +44,7 @@ class BundRssCrawler:
         async with AsyncSessionLocal() as db:
             return await self._crawl(db)
 
-    async def _crawl(self, db) -> int:
+    async def _crawl(self, db: AsyncSession) -> int:
         source = (await db.execute(select(Source).where(Source.slug == self.slug))).scalar_one_or_none()
         start = time.monotonic()
         processed = new = 0
@@ -64,9 +65,10 @@ class BundRssCrawler:
             norm = self._parse_item(item)
             if not norm:
                 continue
-            await resolve(norm, db)
+            _, is_new = await resolve(norm, db)
             processed += 1
-            new += 1
+            if is_new:
+                new += 1
 
         await db.commit()
         elapsed = int((time.monotonic() - start) * 1000)

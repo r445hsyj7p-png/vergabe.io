@@ -78,10 +78,9 @@ class TedCrawler:
                     norm = self._parse(notice)
                     if not norm:
                         continue
-                    is_new_before = norm.source_url is None
-                    tender = await resolve(norm, db)
+                    _, is_new = await resolve(norm, db)
                     processed += 1
-                    if tender.created_at and (datetime.now(timezone.utc) - tender.created_at).total_seconds() < 60:
+                    if is_new:
                         new += 1
 
                 await db.commit()

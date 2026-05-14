@@ -7,8 +7,8 @@ from ...models import Tender, TenderSource, Source, Lot
 from .normalizer import NormalizedTender
 
 
-async def resolve(norm: NormalizedTender, db: AsyncSession) -> Tender:
-    """Find existing tender or create new one. Returns the tender (existing or new)."""
+async def resolve(norm: NormalizedTender, db: AsyncSession) -> tuple[Tender, bool]:
+    """Find existing tender or create new one. Returns (tender, is_new)."""
     source = (await db.execute(select(Source).where(Source.slug == norm.source_slug))).scalar_one_or_none()
 
     # Stage 1: hard match
@@ -18,7 +18,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> Tender:
         )).scalar_one_or_none()
         if existing:
             await _update_source_link(existing, source, norm, db)
-            return existing
+            return existing, False
 
     if norm.external_id:
         existing = (await db.execute(
@@ -26,7 +26,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> Tender:
         )).scalar_one_or_none()
         if existing:
             await _update_source_link(existing, source, norm, db)
-            return existing
+            return existing, False
 
     # Stage 2: fuzzy match on title + authority + deadline proximity
     if norm.contracting_authority and norm.deadline:
@@ -42,7 +42,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> Tender:
         for c in candidates:
             if _title_similarity(c.title, norm.title) > 0.8:
                 await _update_source_link(c, source, norm, db)
-                return c
+                return c, False
 
     # Create new tender
     tender = Tender(
@@ -95,7 +95,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> Tender:
             cpv_codes=lot_data.get("cpv_codes"),
         ))
 
-    return tender
+    return tender, True
 
 
 async def _update_source_link(tender: Tender, source, norm: NormalizedTender, db: AsyncSession):

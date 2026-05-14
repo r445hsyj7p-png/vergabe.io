@@ -36,6 +36,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-vergabe}:${DB_PASSWORD:-vergabe}@postgres:5432/${DB_NAME:-vergabe}
       REDIS_URL: redis://redis:6379/0
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      APP_ENV: development
     volumes:
       - ./scripts:/scripts
       - app_data:/data

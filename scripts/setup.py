@@ -3,36 +3,43 @@
 vergabe.io — First-run setup script.
 Runs automatically via Docker Compose 'setup' service on every start,
 but is idempotent: migrations and seeding are skipped if already done.
-Admin creation is only prompted when no admin exists yet.
 """
 import asyncio
 import sys
 import os
+import traceback
 
 sys.path.insert(0, "/app")
-
-from sqlalchemy import text, select
-from database import engine, AsyncSessionLocal
-from models import KomunenSource, Source, CrawlLog
 
 
 # ── Step 1: Run Alembic migrations ────────────────────────────────────────
 def run_migrations():
-    import subprocess
     print("▶  Running database migrations…")
-    result = subprocess.run(
-        ["alembic", "upgrade", "head"],
-        cwd="/app",
-        capture_output=False,
-    )
-    if result.returncode != 0:
-        print("✗  Migration failed. Aborting.")
+    try:
+        from alembic.config import Config
+        from alembic import command as alembic_command
+
+        cfg = Config("/app/alembic.ini")
+        cfg.set_main_option("script_location", "/app/alembic")
+        alembic_command.upgrade(cfg, "head")
+        print("✓  Migrations applied.")
+    except SystemExit as exc:
+        print(f"✗  Migration failed (alembic exited with code {exc.code}).")
+        traceback.print_exc()
         sys.exit(1)
-    print("✓  Migrations applied.")
+    except Exception:
+        print("✗  Migration failed.")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 # ── Step 2: Seed default sources (idempotent) ──────────────────────────────
 async def seed_sources():
+    from sqlalchemy import text
+    from sqlalchemy.future import select
+    from database import AsyncSessionLocal
+    from models import Source
+
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Source).limit(1))
         if result.scalar_one_or_none():
@@ -59,6 +66,11 @@ async def seed_sources():
 
 # ── Step 3: Seed starter Kommunen (idempotent) ────────────────────────────
 async def seed_komunen():
+    from sqlalchemy.future import select
+    from database import AsyncSessionLocal
+    from models import KomunenSource
+    import uuid
+
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(KomunenSource).limit(1))
         if result.scalar_one_or_none():
@@ -66,7 +78,6 @@ async def seed_komunen():
             return
 
         print("▶  Seeding starter Kommunen list…")
-        import uuid
         STARTER = [
             ("09162000", "München",           "Bayern",                  1512491, "https://www.muenchen.de",        "https://vergabe.muenchen.de"),
             ("11000000", "Berlin",            "Berlin",                  3677472, "https://www.berlin.de",          "https://my.vergabeplattform.berlin.de"),
@@ -124,6 +135,8 @@ async def setup_admin():
     """
     import secrets
     import string
+    from sqlalchemy import text
+    from database import AsyncSessionLocal
 
     admin_file = "/data/admin.key"
     os.makedirs("/data", exist_ok=True)
@@ -165,7 +178,10 @@ async def setup_admin():
 
 # ── Step 5: Trigger initial crawl ─────────────────────────────────────────
 async def trigger_initial_crawl():
-    """Enqueue initial crawl jobs so data is available immediately."""
+    from sqlalchemy.future import select
+    from database import AsyncSessionLocal
+    from models import CrawlLog
+
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(CrawlLog).limit(1))
         if result.scalar_one_or_none():
@@ -175,8 +191,8 @@ async def trigger_initial_crawl():
     print("▶  Triggering initial data fetch (TED + bund.de)…")
     print("   (runs in background via scheduler — data appears within minutes)")
 
-    # Write a marker so scheduler knows to run immediately on startup
     async with AsyncSessionLocal() as db:
+        from models import CrawlLog
         log = CrawlLog(level="info", message="setup:initial_crawl_requested")
         db.add(log)
         await db.commit()
@@ -189,7 +205,6 @@ async def async_main():
     await seed_komunen()
     await setup_admin()
     await trigger_initial_crawl()
-    # Destatis erweiterte Liste (ergänzt die 27 Starter-Kommunen)
     try:
         from crawler.komunen.destatis_sync import sync_from_destatis
         await sync_from_destatis()
@@ -209,4 +224,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        print("\n✗  Setup fehlgeschlagen mit unerwartetem Fehler:")
+        traceback.print_exc()
+        sys.exit(1)

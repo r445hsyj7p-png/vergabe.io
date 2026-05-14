@@ -1,0 +1,62 @@
+# Development overrides — loaded automatically by `docker compose up`.
+# Do NOT commit secrets here. Use a local .env file for sensitive values.
+#
+# Usage:
+#   docker compose up              → starts all services in dev mode
+#   docker compose up backend      → starts only backend (+ deps)
+#   docker compose up --scale caddy=0  → skip Caddy (not needed locally)
+
+services:
+
+  postgres:
+    ports:
+      - "5432:5432"    # expose for local DB tools (e.g. pgAdmin, psql)
+
+  redis:
+    ports:
+      - "6379:6379"    # expose for local inspection
+
+  setup:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+    volumes:
+      - ./backend:/app  # mount source so setup.py sees latest models
+
+  backend:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+      APP_ENV: development
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app  # hot-reload source
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  scheduler:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+    volumes:
+      - ./backend:/app
+
+  crawler:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+    volumes:
+      - ./crawler:/app
+
+  frontend:
+    build:
+      target: development
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # keep container node_modules intact
+    command: npm run dev -- --host 0.0.0.0
+
+  caddy:
+    profiles:
+      - caddy  # opt-in only; not needed for local development

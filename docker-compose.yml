@@ -35,14 +35,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-vergabe}:${DB_PASSWORD:-vergabe}@postgres:5432/${DB_NAME:-vergabe}
       REDIS_URL: redis://redis:6379/0
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - ./scripts:/scripts
       - app_data:/data
     depends_on:
       postgres:
         condition: service_healthy
-    stdin_open: true
-    tty: true
     command: python /scripts/setup.py
     restart: "no"
 

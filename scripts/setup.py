@@ -8,7 +8,6 @@ Admin creation is only prompted when no admin exists yet.
 import asyncio
 import sys
 import os
-import getpass
 
 sys.path.insert(0, "/app")
 
@@ -114,9 +113,18 @@ async def seed_komunen():
         print(f"✓  {len(STARTER)} Kommunen seeded.")
 
 
-# ── Step 4: Create admin user (interactive, only if none exists) ───────────
+# ── Step 4: Create admin user (non-interactive) ────────────────────────────
 async def setup_admin():
-    """Check if an admin token is already configured; if not, prompt."""
+    """Write admin password to /data/admin.key if not already set.
+
+    Priority:
+      1. /data/admin.key already exists → skip (idempotent)
+      2. ADMIN_PASSWORD env var is set → use it
+      3. Fallback → generate a random 20-char password and print it to stdout
+    """
+    import secrets
+    import string
+
     admin_file = "/data/admin.key"
     os.makedirs("/data", exist_ok=True)
 
@@ -124,50 +132,34 @@ async def setup_admin():
         print("✓  Admin already configured.")
         return
 
-    print("\n" + "═" * 50)
-    print("  vergabe.io — Erster Start: Admin einrichten")
-    print("═" * 50)
-    print("Bitte wähle ein Passwort für den Admin-Zugang.")
-    print("Dieses Passwort wird zum Einloggen in die App benötigt.\n")
+    password = os.environ.get("ADMIN_PASSWORD", "").strip()
 
-    while True:
-        try:
-            password = getpass.getpass("  Admin-Passwort: ")
-        except EOFError:
-            # Non-interactive mode (e.g. CI) — use env var fallback
-            password = os.environ.get("ADMIN_PASSWORD", "")
-            if not password:
-                print("✗  Kein Passwort gesetzt. Setze ADMIN_PASSWORD in .env.")
-                sys.exit(1)
-            print("  (Passwort aus Umgebungsvariable ADMIN_PASSWORD übernommen)")
-            break
+    if password:
+        print("  (Admin-Passwort aus Umgebungsvariable ADMIN_PASSWORD übernommen)")
+    else:
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        password = "".join(secrets.choice(alphabet) for _ in range(20))
+        print("\n" + "!" * 60)
+        print("  KEIN ADMIN_PASSWORD GESETZT — zufälliges Passwort generiert:")
+        print(f"  ADMIN_PASSWORD = {password}")
+        print("  Bitte in der .env-Datei setzen, um dieses Passwort zu")
+        print("  behalten. Andernfalls wird bei erneutem Setup ein neues")
+        print("  Passwort generiert.")
+        print("!" * 60 + "\n")
 
-        if len(password) < 8:
-            print("  ✗  Mindestens 8 Zeichen erforderlich.\n")
-            continue
-
-        try:
-            confirm = getpass.getpass("  Passwort bestätigen: ")
-        except EOFError:
-            confirm = password
-
-        if password != confirm:
-            print("  ✗  Passwörter stimmen nicht überein.\n")
-            continue
-
-        break
-
-    # Write to persistent volume + inject into env for backend
     with open(admin_file, "w") as f:
         f.write(password)
     os.chmod(admin_file, 0o600)
 
-    # Also update the DB config marker
     async with AsyncSessionLocal() as db:
-        await db.execute(text("INSERT INTO crawl_logs (id, level, message) VALUES (gen_random_uuid(), 'info', 'Admin user configured') ON CONFLICT DO NOTHING"))
+        await db.execute(text(
+            "INSERT INTO crawl_logs (id, level, message) "
+            "VALUES (gen_random_uuid(), 'info', 'Admin user configured') "
+            "ON CONFLICT DO NOTHING"
+        ))
         await db.commit()
 
-    print("\n✓  Admin-Passwort gespeichert.")
+    print("✓  Admin-Passwort gespeichert.")
     print("✓  Starte vergabe.io…\n")
 
 

@@ -122,6 +122,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: development
     ports:
       - "5173:5173"
     environment:

@@ -1,10 +1,8 @@
 {
-    email admin@vergabe.io
+    email alexander.wyrwol@me.com
 }
 
-vergabe.io www.vergabe.io {
-    redir https://vergabe.io{uri}
-
+vergabe.cycl.group {
     # Frontend (static files served by frontend container)
     reverse_proxy frontend:80
 

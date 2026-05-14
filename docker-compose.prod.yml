@@ -58,7 +58,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-vergabe@localhost}
       APP_ENV: production
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://vergabe.io}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://vergabe.cycl.group}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       postgres:

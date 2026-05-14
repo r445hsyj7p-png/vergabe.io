@@ -1,0 +1,40 @@
+# Development overrides — loaded automatically by `docker compose up`
+services:
+
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      target: development
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe
+      APP_ENV: development
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000
+      SECRET_KEY: dev-secret-key
+      ADMIN_PASSWORD: admin
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    command: bash -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build:
+      target: development
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  caddy:
+    profiles:
+      - caddy

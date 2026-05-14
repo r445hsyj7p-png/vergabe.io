@@ -1,0 +1,31 @@
+{
+    email alexander.wyrwol@me.com
+}
+
+vergabe.cycl.group {
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy backend:8000
+    }
+
+    handle /auth/* {
+        reverse_proxy backend:8000
+    }
+
+    handle /docs* {
+        reverse_proxy backend:8000
+    }
+
+    handle /openapi.json {
+        reverse_proxy backend:8000
+    }
+
+    handle /health {
+        reverse_proxy backend:8000
+    }
+
+    reverse_proxy frontend:80
+
+    encode gzip
+    log { output stdout }
+}

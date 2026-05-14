@@ -1,0 +1,81 @@
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${DB_USER:-vergabe}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-vergabe}
+      POSTGRES_DB: ${DB_NAME:-vergabe}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-vergabe}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: always
+
+  # ── Backend (API + Scheduler + Crawler) ──────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-vergabe}:${DB_PASSWORD:-vergabe}@postgres:5432/${DB_NAME:-vergabe}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-changeme}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      APP_ENV: production
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://vergabe.cycl.group}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SUMMARY_PROVIDER: ${SUMMARY_PROVIDER:-anthropic}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-vergabe@localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
+  # ── Frontend (static) ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    restart: always
+
+  # ── Reverse proxy + TLS ──────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: always
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

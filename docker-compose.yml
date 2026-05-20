@@ -62,12 +62,13 @@ services:
 
   # ── Reverse proxy + TLS ──────────────────────────────────────────────────
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: ./infra
+      dockerfile: Dockerfile
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

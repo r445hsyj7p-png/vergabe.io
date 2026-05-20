@@ -1,7 +1,7 @@
-FROM node:22-alpine AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --frozen-lockfile
+RUN npm ci
 COPY . .
 RUN npm run build
 

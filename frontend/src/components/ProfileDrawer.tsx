@@ -1,17 +1,19 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import * as Switch from '@radix-ui/react-switch'
+import { Plus, Trash2 } from 'lucide-react'
 import { fetchProfiles, createProfile, updateProfile, deleteProfile } from '../api/client'
 import type { SearchProfile } from '../types'
 import { Drawer } from './Drawer'
 
 interface Props { open: boolean; onClose: () => void }
 
-const empty = { name: '', keywords: '', cpv_codes: '', deadline_days: '', min_value: '', email: '', is_active: true }
+const emptyForm = { name: '', keywords: '', cpv_codes: '', deadline_days: '', min_value: '', email: '' }
 
 export function ProfileDrawer({ open, onClose }: Props) {
   const qc = useQueryClient()
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: fetchProfiles })
-  const [form, setForm] = useState(empty)
+  const [form, setForm] = useState(emptyForm)
 
   const createMut = useMutation({
     mutationFn: () => createProfile({
@@ -23,7 +25,7 @@ export function ProfileDrawer({ open, onClose }: Props) {
       email: form.email || null,
       is_active: true,
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profiles'] }); setForm(empty) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['profiles'] }); setForm(emptyForm) },
   })
 
   const deleteMut = useMutation({
@@ -36,74 +38,95 @@ export function ProfileDrawer({ open, onClose }: Props) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['profiles'] }),
   })
 
-  const F = (key: string) => ({
-    value: (form as any)[key],
-    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [key]: e.target.value }),
-  })
+  function setField(key: string, value: string) {
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  const fields: Array<{ label: string; key: keyof typeof emptyForm; placeholder: string }> = [
+    { label: 'Name', key: 'name', placeholder: 'z.B. Cybersecurity DE' },
+    { label: 'Stichwörter', key: 'keywords', placeholder: 'SOC, MDR, XDR, SIEM (kommagetrennt)' },
+    { label: 'CPV-Codes', key: 'cpv_codes', placeholder: '72220000, 72200000' },
+    { label: 'Deadline-Tage', key: 'deadline_days', placeholder: '30' },
+    { label: 'Min. Volumen €', key: 'min_value', placeholder: '100000' },
+    { label: 'Alert-E-Mail', key: 'email', placeholder: 'deine@email.de' },
+  ]
 
   return (
     <Drawer open={open} onClose={onClose} title="Suchprofile & Alerts">
       {/* Create form */}
-      <div style={{ padding: '14px 0', borderBottom: '0.5px solid var(--border)' }}>
-        <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Neues Profil</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {[
-            { label: 'Name', key: 'name', placeholder: 'z.B. Cybersecurity DE' },
-            { label: 'Stichwörter', key: 'keywords', placeholder: 'SOC, MDR, XDR, SIEM (kommagetrennt)' },
-            { label: 'CPV-Codes', key: 'cpv_codes', placeholder: '72220000, 72200000' },
-            { label: 'Deadline-Tage', key: 'deadline_days', placeholder: '30' },
-            { label: 'Min. Volumen €', key: 'min_value', placeholder: '100000' },
-            { label: 'Alert-E-Mail', key: 'email', placeholder: 'deine@email.de' },
-          ].map(({ label, key, placeholder }) => (
+      <div className="py-[14px]" style={{ borderBottom: '0.5px solid var(--color-border)' }}>
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider mb-2.5"
+          style={{ color: 'var(--color-ink3)' }}
+        >
+          Neues Profil
+        </div>
+        <div className="flex flex-col gap-2">
+          {fields.map(({ label, key, placeholder }) => (
             <div key={key}>
-              <label style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 500, display: 'block', marginBottom: 3 }}>{label}</label>
-              <input {...F(key)} placeholder={placeholder} style={{
-                width: '100%', background: 'var(--bg)', border: '0.5px solid var(--border)',
-                borderRadius: 5, color: 'var(--text)', fontSize: 12.5, padding: '6px 9px', outline: 'none',
-              }} />
+              <label className="block text-[11px] font-medium mb-[3px]" style={{ color: 'var(--color-ink2)' }}>
+                {label}
+              </label>
+              <input
+                value={form[key]}
+                onChange={(e) => setField(key, e.target.value)}
+                placeholder={placeholder}
+                className="w-full rounded-[5px] text-[12.5px] px-[9px] py-[6px] outline-none"
+                style={{ background: 'var(--color-bg)', border: '0.5px solid var(--color-border)', color: 'var(--color-ink)' }}
+              />
             </div>
           ))}
-          <button onClick={() => createMut.mutate()} disabled={!form.name} style={{
-            background: 'var(--accent)', color: 'white', border: 'none',
-            borderRadius: 'var(--r)', padding: '7px 12px', fontSize: 12, fontWeight: 500,
-            alignSelf: 'flex-start', opacity: !form.name ? 0.5 : 1,
-          }}>Profil & Alert speichern</button>
+          <button
+            onClick={() => createMut.mutate()}
+            disabled={!form.name}
+            className="self-start flex items-center gap-1.5 text-white rounded-md px-3 py-[7px] text-[12px] font-medium transition-opacity"
+            style={{ background: 'var(--color-brand)', opacity: !form.name ? 0.5 : 1 }}
+          >
+            <Plus size={13} />
+            Profil & Alert speichern
+          </button>
         </div>
       </div>
 
       {/* Existing profiles */}
-      <div style={{ padding: '14px 0' }}>
-        <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>Aktive Profile</div>
+      <div className="py-[14px]">
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider mb-2.5"
+          style={{ color: 'var(--color-ink3)' }}
+        >
+          Aktive Profile
+        </div>
         {profiles.map((p) => (
-          <div key={p.id} style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '9px 0', borderBottom: '0.5px solid var(--border)',
-          }}>
+          <div
+            key={p.id}
+            className="flex items-center justify-between py-[9px]"
+            style={{ borderBottom: '0.5px solid var(--color-border)' }}
+          >
             <div>
-              <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text)' }}>{p.name}</div>
-              <div style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>
+              <div className="text-[12.5px] font-medium" style={{ color: 'var(--color-ink)' }}>{p.name}</div>
+              <div className="font-mono text-[10px]" style={{ color: 'var(--color-ink3)' }}>
                 {(p.keywords || []).slice(0, 3).join(', ')}{p.deadline_days ? ` · <${p.deadline_days}T` : ''}
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <label style={{ position: 'relative', width: 30, height: 17, cursor: 'pointer' }}>
-                <input type="checkbox" checked={p.is_active} onChange={() => toggleMut.mutate(p)}
-                  style={{ opacity: 0, width: 0, height: 0 }} />
-                <span style={{
-                  position: 'absolute', inset: 0, borderRadius: 17,
-                  background: p.is_active ? 'var(--accent)' : 'var(--border2)',
-                  transition: 'background .2s',
-                }} />
-                <span style={{
-                  position: 'absolute', top: 2, left: p.is_active ? 15 : 2,
-                  width: 13, height: 13, background: 'white', borderRadius: '50%',
-                  transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.2)',
-                }} />
-              </label>
-              <button onClick={() => deleteMut.mutate(p.id)} style={{
-                width: 22, height: 22, borderRadius: 4, border: '0.5px solid var(--border)',
-                background: 'var(--white)', color: 'var(--text3)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>✕</button>
+            <div className="flex items-center gap-1.5">
+              <Switch.Root
+                checked={p.is_active}
+                onCheckedChange={() => toggleMut.mutate(p)}
+                className="relative inline-flex w-[30px] h-[17px] rounded-full cursor-pointer outline-none transition-colors"
+                style={{ background: p.is_active ? 'var(--color-brand)' : 'var(--color-border2)' }}
+              >
+                <Switch.Thumb
+                  className="block w-[13px] h-[13px] rounded-full bg-white shadow-sm transition-transform duration-200 translate-x-[2px] data-[state=checked]:translate-x-[15px]"
+                  style={{ marginTop: 2 }}
+                />
+              </Switch.Root>
+              <button
+                onClick={() => deleteMut.mutate(p.id)}
+                className="w-[22px] h-[22px] rounded flex items-center justify-center"
+                style={{ border: '0.5px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-ink3)' }}
+              >
+                <Trash2 size={12} />
+              </button>
             </div>
           </div>
         ))}

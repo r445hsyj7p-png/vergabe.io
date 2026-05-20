@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Sparkles, RefreshCw } from 'lucide-react'
 import { fetchSummaryStatus, generateSummary, deleteSummary } from '../../api/client'
 
 interface Props {
@@ -15,18 +16,26 @@ const PROVIDER_LABELS: Record<string, string> = {
 function ProviderBadge({ provider }: { provider: string }) {
   const isLocal = provider === 'ollama'
   return (
-    <span style={{
-      fontSize: 10,
-      fontFamily: 'var(--mono)',
-      padding: '1px 6px',
-      borderRadius: 4,
-      background: isLocal ? 'var(--green-l)' : 'var(--accent-l)',
-      color: isLocal ? 'var(--green)' : 'var(--accent)',
-      border: `0.5px solid ${isLocal ? '#86efac' : '#c7d7fb'}`,
-      whiteSpace: 'nowrap',
-    }}>
+    <span
+      className="font-mono text-[10px] px-[6px] py-[1px] rounded whitespace-nowrap"
+      style={{
+        background: isLocal ? 'var(--color-emerald-light)' : 'var(--color-brand-light)',
+        color: isLocal ? 'var(--color-emerald)' : 'var(--color-brand)',
+        border: `0.5px solid ${isLocal ? '#86efac' : '#c7d7fb'}`,
+      }}
+    >
       {PROVIDER_LABELS[provider] || provider}
     </span>
+  )
+}
+
+function Spinner() {
+  return (
+    <RefreshCw
+      size={14}
+      className="animate-spin"
+      style={{ color: 'var(--color-brand)' }}
+    />
   )
 }
 
@@ -55,8 +64,9 @@ export function SummaryButton({ tenderId }: Props) {
     try {
       await generateSummary(tenderId)
       qc.invalidateQueries({ queryKey: ['summary-status', tenderId] })
-    } catch (e: any) {
-      const detail = e?.response?.data?.detail || 'Fehler beim Generieren der Zusammenfassung.'
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      const detail = err?.response?.data?.detail || 'Fehler beim Generieren der Zusammenfassung.'
       setError(detail)
     } finally {
       setGenerating(false)
@@ -65,7 +75,7 @@ export function SummaryButton({ tenderId }: Props) {
 
   if (statusLoading) return null
 
-  // ── Summary already exists ───────────────────────────────────────────
+  // Summary already exists
   if (status?.exists && status.summary) {
     const s = status.summary
     const date = new Date(s.created_at).toLocaleDateString('de-DE')
@@ -74,14 +84,13 @@ export function SummaryButton({ tenderId }: Props) {
       : `${(s.cost_cents / 100).toFixed(3)} €`
 
     return (
-      <div style={{ marginBottom: 16 }}>
-        {/* Header */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          marginBottom: 8,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5">
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider"
+              style={{ color: 'var(--color-ink3)' }}
+            >
               KI-Zusammenfassung
             </span>
             <ProviderBadge provider={s.provider} />
@@ -89,56 +98,47 @@ export function SummaryButton({ tenderId }: Props) {
           <button
             onClick={() => deleteMut.mutate()}
             title="Zusammenfassung löschen und neu generieren"
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: 11, color: 'var(--text3)', padding: '2px 4px', borderRadius: 4,
-              transition: 'color .1s',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--red)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text3)')}
-          >↺ Neu generieren</button>
+            className="flex items-center gap-1 text-[11px] px-1 py-[2px] rounded transition-colors"
+            style={{ background: 'none', border: 'none', color: 'var(--color-ink3)', cursor: 'pointer' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--color-rose)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--color-ink3)' }}
+          >
+            <RefreshCw size={11} />
+            Neu generieren
+          </button>
         </div>
 
-        {/* Summary text */}
-        <div style={{
-          background: 'var(--accent-l)',
-          border: '0.5px solid #c7d7fb',
-          borderRadius: 'var(--r)',
-          padding: '10px 12px',
-        }}>
-          <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.65 }}>
+        <div
+          className="rounded px-3 py-2.5"
+          style={{ background: 'var(--color-brand-light)', border: '0.5px solid #c7d7fb' }}
+        >
+          <p className="text-[12.5px] leading-[1.65]" style={{ color: 'var(--color-ink)' }}>
             {s.summary_text}
           </p>
         </div>
 
-        {/* Meta */}
-        <div style={{ display: 'flex', gap: 8, marginTop: 5 }}>
-          <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>
-            {s.model}
-          </span>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>·</span>
-          <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'var(--mono)' }}>
-            {costLabel}
-          </span>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>·</span>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>{date}</span>
+        <div className="flex gap-2 mt-[5px]">
+          <span className="font-mono text-[10px]" style={{ color: 'var(--color-ink3)' }}>{s.model}</span>
+          <span className="text-[10px]" style={{ color: 'var(--color-ink3)' }}>·</span>
+          <span className="font-mono text-[10px]" style={{ color: 'var(--color-ink3)' }}>{costLabel}</span>
+          <span className="text-[10px]" style={{ color: 'var(--color-ink3)' }}>·</span>
+          <span className="text-[10px]" style={{ color: 'var(--color-ink3)' }}>{date}</span>
         </div>
       </div>
     )
   }
 
-  // ── No summary yet ───────────────────────────────────────────────────
+  // No summary yet
   const providerName = status?.provider_configured || 'anthropic'
   const isLocal = providerName === 'ollama'
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div className="mb-4">
       {error && (
-        <div style={{
-          background: 'var(--red-l)', border: '0.5px solid #fecaca',
-          borderRadius: 'var(--r)', padding: '8px 10px', marginBottom: 8,
-          fontSize: 12, color: 'var(--red)', lineHeight: 1.5,
-        }}>
+        <div
+          className="rounded px-[10px] py-2 mb-2 text-[12px] leading-relaxed"
+          style={{ background: 'var(--color-rose-light)', border: '0.5px solid #fecaca', color: 'var(--color-rose)' }}
+        >
           {error}
         </div>
       )}
@@ -146,18 +146,25 @@ export function SummaryButton({ tenderId }: Props) {
       <button
         onClick={handleGenerate}
         disabled={generating}
+        className="inline-flex items-center gap-[7px] px-[13px] py-[7px] rounded w-full justify-center text-[12.5px] transition-all"
         style={{
-          display: 'inline-flex', alignItems: 'center', gap: 7,
-          padding: '7px 13px', borderRadius: 'var(--r)',
-          border: '0.5px solid var(--border)',
-          background: generating ? 'var(--bg2)' : 'var(--white)',
-          color: generating ? 'var(--text3)' : 'var(--text2)',
-          fontSize: 12.5, cursor: generating ? 'not-allowed' : 'pointer',
-          transition: 'all .12s',
-          width: '100%', justifyContent: 'center',
+          border: '0.5px solid var(--color-border)',
+          background: generating ? 'var(--color-bg2)' : 'var(--color-surface)',
+          color: generating ? 'var(--color-ink3)' : 'var(--color-ink2)',
+          cursor: generating ? 'not-allowed' : 'pointer',
         }}
-        onMouseEnter={(e) => { if (!generating) { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)' } }}
-        onMouseLeave={(e) => { if (!generating) { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)' } }}
+        onMouseEnter={(e) => {
+          if (!generating) {
+            e.currentTarget.style.borderColor = 'var(--color-brand)'
+            e.currentTarget.style.color = 'var(--color-brand)'
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!generating) {
+            e.currentTarget.style.borderColor = 'var(--color-border)'
+            e.currentTarget.style.color = 'var(--color-ink2)'
+          }
+        }}
       >
         {generating ? (
           <>
@@ -166,11 +173,11 @@ export function SummaryButton({ tenderId }: Props) {
           </>
         ) : (
           <>
-            <span style={{ fontSize: 14 }}>✦</span>
+            <Sparkles size={14} />
             KI-Zusammenfassung erstellen
             <ProviderBadge provider={providerName} />
             {isLocal && (
-              <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)' }}>
+              <span className="font-mono text-[10px]" style={{ color: 'var(--color-emerald)' }}>
                 kostenlos
               </span>
             )}
@@ -179,21 +186,10 @@ export function SummaryButton({ tenderId }: Props) {
       </button>
 
       {!generating && (
-        <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 5, textAlign: 'center' }}>
+        <div className="text-[10.5px] mt-[5px] text-center" style={{ color: 'var(--color-ink3)' }}>
           Einmalig generiert · danach gespeichert · kein weiterer Aufruf
         </div>
       )}
     </div>
-  )
-}
-
-function Spinner() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
-      style={{ animation: 'spin 1s linear infinite' }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-      <circle cx="7" cy="7" r="5.5" stroke="var(--border2)" strokeWidth="1.5"/>
-      <path d="M7 1.5A5.5 5.5 0 0 1 12.5 7" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round"/>
-    </svg>
   )
 }

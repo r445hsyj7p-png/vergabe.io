@@ -1,17 +1,13 @@
-FROM node:22-alpine AS base
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
-
-FROM base AS development
-COPY . .
-EXPOSE 5173
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
-
-FROM base AS builder
+RUN npm ci --frozen-lockfile
 COPY . .
 RUN npm run build
 
-FROM caddy:2-alpine AS production
-COPY --from=builder /app/dist /srv
-COPY Caddyfile /etc/caddy/Caddyfile
+FROM node:22-alpine AS production
+WORKDIR /app
+RUN npm install -g serve
+COPY --from=builder /app/dist ./dist
+EXPOSE 4173
+CMD ["serve", "-s", "dist", "-l", "4173"]

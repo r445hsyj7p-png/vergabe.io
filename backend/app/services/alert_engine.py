@@ -3,6 +3,7 @@ import smtplib
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from sqlalchemy import select, and_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,19 +57,17 @@ async def run_alert_engine(db: AsyncSession, since: datetime | None = None) -> i
         for tender in tenders:
             if not _matches(tender, profile):
                 continue
-            existing = (await db.execute(
-                select(Notification).where(and_(
-                    Notification.profile_id == profile.id,
-                    Notification.tender_id == tender.id,
-                    Notification.notification_type == "new_match",
-                ))
-            )).scalar_one_or_none()
-            if not existing:
-                db.add(Notification(
+            result = await db.execute(
+                pg_insert(Notification)
+                .values(
                     profile_id=profile.id,
                     tender_id=tender.id,
                     notification_type="new_match",
-                ))
+                )
+                .on_conflict_do_nothing()
+                .returning(Notification.id)
+            )
+            if result.scalar_one_or_none() is not None:
                 created += 1
 
     await db.commit()
@@ -98,19 +97,17 @@ async def run_deadline_warnings(db: AsyncSession) -> int:
 
         for profile in profiles:
             notif_type = f"deadline_warning_{days_left}d"
-            existing = (await db.execute(
-                select(Notification).where(and_(
-                    Notification.profile_id == profile.id,
-                    Notification.tender_id == t.id,
-                    Notification.notification_type == notif_type,
-                ))
-            )).scalar_one_or_none()
-            if not existing:
-                db.add(Notification(
+            result = await db.execute(
+                pg_insert(Notification)
+                .values(
                     profile_id=profile.id,
                     tender_id=t.id,
                     notification_type=notif_type,
-                ))
+                )
+                .on_conflict_do_nothing()
+                .returning(Notification.id)
+            )
+            if result.scalar_one_or_none() is not None:
                 created += 1
 
     await db.commit()

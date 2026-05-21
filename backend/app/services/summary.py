@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +18,7 @@ Beschreibung: {description}
 """
 
 
-async def generate_and_store(tender_id: str, db: AsyncSession) -> TenderSummary:
+async def generate_and_store(tender_id: uuid.UUID, db: AsyncSession) -> TenderSummary:
     t = (await db.execute(select(Tender).where(Tender.id == tender_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Tender not found")

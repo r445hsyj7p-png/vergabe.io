@@ -80,10 +80,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      backend:
-        condition: service_healthy
-      frontend:
-        condition: service_started
+      - backend
+      - frontend
     restart: always
 
 volumes:

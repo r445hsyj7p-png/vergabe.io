@@ -2,7 +2,7 @@
     email alexander.wyrwol@me.com
 }
 
-vergabe.cycl.group {
+http://vergabe.cycl.group {
     handle /api/* {
         uri strip_prefix /api
         reverse_proxy backend:8000

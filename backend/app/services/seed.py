@@ -1,6 +1,7 @@
 import uuid
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..models import Source, KomunenSource
 
 
@@ -34,25 +35,32 @@ async def seed_all(db: AsyncSession) -> None:
 
 
 async def _seed_sources(db: AsyncSession) -> None:
-    for name, slug, stype, base_url, cls, interval in SOURCES:
-        existing = (await db.execute(select(Source).where(Source.slug == slug))).scalar_one_or_none()
-        if not existing:
-            db.add(Source(
-                id=uuid.uuid4(), name=name, slug=slug, source_type=stype,
-                base_url=base_url, scraper_class=cls, interval_hours=interval,
-            ))
+    # ON CONFLICT DO NOTHING on sources.slug (unique) makes this safe on concurrent
+    # startup and across restarts without a SELECT round-trip per row.
+    rows = [
+        dict(
+            id=uuid.uuid4(), name=name, slug=slug, source_type=stype,
+            base_url=base_url, scraper_class=cls, interval_hours=interval,
+        )
+        for name, slug, stype, base_url, cls, interval in SOURCES
+    ]
+    await db.execute(pg_insert(Source).values(rows).on_conflict_do_nothing(index_elements=["slug"]))
     await db.commit()
 
 
 async def _seed_komunen(db: AsyncSession) -> None:
-    count = (await db.execute(select(KomunenSource).limit(1))).scalar_one_or_none()
-    if count:
+    # Skip entirely if any komunen already exist (idempotent across restarts).
+    exists = (await db.execute(select(KomunenSource).limit(1))).scalar_one_or_none()
+    if exists:
         return
-    for ags, name, bl, ew, main_url, vergabe_url in STARTER_KOMUNEN:
-        db.add(KomunenSource(
+    rows = [
+        dict(
             id=uuid.uuid4(), ags=ags, name=name, bundesland=bl, einwohner=ew,
             main_url=main_url, vergabe_url=vergabe_url,
             discovery_confidence=1.0 if vergabe_url else None,
             status="verified" if vergabe_url else "auto",
-        ))
+        )
+        for ags, name, bl, ew, main_url, vergabe_url in STARTER_KOMUNEN
+    ]
+    await db.execute(pg_insert(KomunenSource).values(rows).on_conflict_do_nothing())
     await db.commit()

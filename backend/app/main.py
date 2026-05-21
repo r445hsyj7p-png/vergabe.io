@@ -79,4 +79,14 @@ async def login(body: LoginRequest, request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    provider = settings.summary_provider
+    key_configured = bool(
+        (provider == "anthropic" and settings.anthropic_api_key) or
+        (provider == "openai" and settings.openai_api_key) or
+        provider == "ollama"
+    )
+    return {
+        "status": "ok",
+        "summary_provider": provider,
+        "summary_api_key_set": key_configured,
+    }

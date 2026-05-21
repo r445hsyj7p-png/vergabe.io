@@ -65,9 +65,27 @@ export function SummaryButton({ tenderId }: Props) {
       await generateSummary(tenderId)
       qc.invalidateQueries({ queryKey: ['summary-status', tenderId] })
     } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } } }
-      const detail = err?.response?.data?.detail || 'Fehler beim Generieren der Zusammenfassung.'
-      setError(detail)
+      const err = e as { response?: { status?: number; data?: { detail?: string } } }
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail
+
+      let msg: string
+      if (detail) {
+        msg = status ? `[HTTP ${status}] ${detail}` : detail
+      } else if (status === 401) {
+        msg = '[HTTP 401] Nicht authentifiziert — bitte neu einloggen'
+      } else if (status === 404) {
+        msg = '[HTTP 404] Ausschreibung nicht gefunden'
+      } else if (status === 429) {
+        msg = '[HTTP 429] Rate-Limit erreicht — bitte kurz warten'
+      } else if (status && status >= 500) {
+        msg = `[HTTP ${status}] Server-Fehler — Details im Backend-Log`
+      } else if (!status) {
+        msg = 'Netzwerkfehler — Server nicht erreichbar'
+      } else {
+        msg = `[HTTP ${status}] Unbekannter Fehler beim Generieren`
+      }
+      setError(msg)
     } finally {
       setGenerating(false)
     }

@@ -11,11 +11,9 @@ import { cn } from '@/lib/utils'
 interface Props {
   filters: TenderFilters
   onFiltersChange: (f: TenderFilters) => void
-  activeProfile: SearchProfile | null
-  onProfileSelect: (p: SearchProfile | null) => void
 }
 
-export function Topbar({ filters, onFiltersChange, activeProfile, onProfileSelect }: Props) {
+export function Topbar({ filters, onFiltersChange }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = location.pathname === '/admin'
@@ -27,20 +25,19 @@ export function Topbar({ filters, onFiltersChange, activeProfile, onProfileSelec
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications'],
     queryFn: () => fetchNotifications(true),
-    refetchInterval: 60_000,
+    refetchInterval: 30_000,
   })
 
+  const activeProfile: SearchProfile | null = profiles.find((p) => p.id === filters.profile_id) ?? null
   const unread = notifications.filter((n) => !n.is_read).length
 
   function handleProfileSelect(p: SearchProfile) {
     setShowProfileDD(false)
-    onProfileSelect(p)
-    const keywords = (p.keywords || []).join(', ')
-    onFiltersChange({ ...filters, q: keywords, profile_id: p.id, page: 1 })
+    onFiltersChange({ ...filters, profile_id: p.id, page: 1 })
   }
 
   function logout() {
-    localStorage.removeItem('vergabe_token')
+    sessionStorage.removeItem('vergabe_token')
     navigate('/login')
   }
 
@@ -92,7 +89,7 @@ export function Topbar({ filters, onFiltersChange, activeProfile, onProfileSelec
               style={{ border: '0.5px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-ink2)' }}
             >
               Suchprofil:&nbsp;
-              <span className="font-medium" style={{ color: 'var(--color-brand)' }}>
+              <span className="font-medium max-w-[160px] truncate" style={{ color: 'var(--color-brand)' }}>
                 {activeProfile ? activeProfile.name : 'Kein Profil'}
               </span>
               <ChevronDown size={12} />
@@ -105,8 +102,7 @@ export function Topbar({ filters, onFiltersChange, activeProfile, onProfileSelec
                 <div
                   onClick={() => {
                     setShowProfileDD(false)
-                    onProfileSelect(null)
-                    onFiltersChange({ ...filters, profile_id: undefined, q: undefined, page: 1 })
+                    onFiltersChange({ ...filters, profile_id: undefined, page: 1 })
                   }}
                   className="px-[10px] py-[7px] rounded cursor-pointer text-[12.5px]"
                   style={{ color: 'var(--color-ink2)' }}
@@ -158,7 +154,7 @@ export function Topbar({ filters, onFiltersChange, activeProfile, onProfileSelec
             />
             <input
               value={filters.q || ''}
-              onChange={(e) => onFiltersChange({ ...filters, q: e.target.value, page: 1 })}
+              onChange={(e) => onFiltersChange({ ...filters, q: e.target.value || undefined, page: 1 })}
               placeholder="Suchbegriff, CPV-Code, Auftraggeber…"
               className="w-full pl-8 pr-[10px] py-[7px] rounded text-[12.5px] outline-none"
               style={{ background: 'var(--color-bg)', border: '0.5px solid var(--color-border)', color: 'var(--color-ink)' }}

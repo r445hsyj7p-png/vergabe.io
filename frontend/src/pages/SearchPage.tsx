@@ -1,19 +1,52 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
-import { fetchTenders, exportUrl } from '../api/client'
-import type { Tender, TenderFilters, SearchProfile } from '../types'
+import { fetchTenders, downloadExport } from '../api/client'
+import type { Tender, TenderFilters } from '../types'
 import { Topbar } from '../components/Topbar'
 import { FilterSidebar } from '../components/filters/FilterSidebar'
 import { TenderList } from '../components/TenderList'
 import { DetailPanel } from '../components/detail/DetailPanel'
 
-const DEFAULT_FILTERS: TenderFilters = { status: 'open', page: 1, page_size: 25 }
+function filtersToParams(f: TenderFilters): Record<string, string> {
+  const p: Record<string, string> = {}
+  if (f.q) p.q = f.q
+  if (f.cpv) p.cpv = f.cpv
+  if (f.region) p.region = f.region
+  if (f.auftraggeber) p.auftraggeber = f.auftraggeber
+  if (f.it_category) p.it_category = f.it_category
+  if (f.status && f.status !== 'open') p.status = f.status
+  if (f.min_value) p.min_value = String(f.min_value)
+  if (f.profile_id) p.profile_id = f.profile_id
+  if (f.tag_status) p.tag_status = f.tag_status
+  if (f.page && f.page > 1) p.page = String(f.page)
+  if (f.page_size && f.page_size !== 25) p.page_size = String(f.page_size)
+  return p
+}
+
+function filtersFromParams(params: URLSearchParams): TenderFilters {
+  return {
+    q: params.get('q') ?? undefined,
+    cpv: params.get('cpv') ?? undefined,
+    region: params.get('region') ?? undefined,
+    auftraggeber: params.get('auftraggeber') ?? undefined,
+    it_category: params.get('it_category') ?? undefined,
+    status: params.get('status') ?? 'open',
+    min_value: params.get('min_value') ? Number(params.get('min_value')) : undefined,
+    profile_id: params.get('profile_id') ?? undefined,
+    tag_status: params.get('tag_status') ?? undefined,
+    page: params.get('page') ? Number(params.get('page')) : 1,
+    page_size: params.get('page_size') ? Number(params.get('page_size')) : 25,
+  }
+}
 
 export function SearchPage() {
-  const [filters, setFilters] = useState<TenderFilters>(DEFAULT_FILTERS)
-  const [activeProfile, setActiveProfile] = useState<SearchProfile | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
   const [selected, setSelected] = useState<Tender | null>(null)
   const [selectedIdx, setSelectedIdx] = useState<number>(-1)
+
+  const filters = filtersFromParams(searchParams)
+  const setFilters = (f: TenderFilters) => setSearchParams(filtersToParams(f), { replace: true })
 
   const { data, isLoading } = useQuery({
     queryKey: ['tenders', filters],
@@ -44,8 +77,6 @@ export function SearchPage() {
       <Topbar
         filters={filters}
         onFiltersChange={setFilters}
-        activeProfile={activeProfile}
-        onProfileSelect={setActiveProfile}
       />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <FilterSidebar filters={filters} onChange={setFilters} />
@@ -118,14 +149,13 @@ export function SearchPage() {
                 ›
               </button>
             </div>
-            <a
-              href={exportUrl(filters)}
-              download="ausschreibungen.csv"
-              className="px-[10px] py-1 rounded no-underline text-[11px]"
-              style={{ border: '0.5px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-ink2)' }}
+            <button
+              onClick={() => downloadExport(filters)}
+              className="px-[10px] py-1 rounded text-[11px]"
+              style={{ border: '0.5px solid var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-ink2)', cursor: 'pointer' }}
             >
               ↓ CSV
-            </a>
+            </button>
           </div>
         </div>
         {selected && (

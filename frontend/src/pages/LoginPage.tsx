@@ -15,7 +15,7 @@ export function LoginPage() {
     setError('')
     try {
       const data = await login(password)
-      localStorage.setItem('vergabe_token', data.access_token)
+      sessionStorage.setItem('vergabe_token', data.access_token)
       navigate('/')
     } catch {
       setError('Falsches Passwort.')

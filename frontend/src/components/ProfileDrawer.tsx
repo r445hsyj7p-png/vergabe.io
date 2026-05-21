@@ -78,12 +78,12 @@ export function ProfileDrawer({ open, onClose }: Props) {
           ))}
           <button
             onClick={() => createMut.mutate()}
-            disabled={!form.name}
+            disabled={!form.name || createMut.isPending}
             className="self-start flex items-center gap-1.5 text-white rounded-md px-3 py-[7px] text-[12px] font-medium transition-opacity"
-            style={{ background: 'var(--color-brand)', opacity: !form.name ? 0.5 : 1 }}
+            style={{ background: 'var(--color-brand)', opacity: (!form.name || createMut.isPending) ? 0.5 : 1 }}
           >
             <Plus size={13} />
-            Profil & Alert speichern
+            {createMut.isPending ? 'Speichern…' : 'Profil & Alert speichern'}
           </button>
         </div>
       </div>

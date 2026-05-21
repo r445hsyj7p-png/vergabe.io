@@ -11,7 +11,7 @@ const BASE = import.meta.env.VITE_API_URL || '/api'
 export const api = axios.create({ baseURL: BASE })
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('vergabe_token')
+  const token = sessionStorage.getItem('vergabe_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
@@ -20,7 +20,7 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('vergabe_token')
+      sessionStorage.removeItem('vergabe_token')
       window.location.href = '/login'
     }
     return Promise.reject(err)
@@ -153,10 +153,18 @@ export async function deleteSummary(tenderId: string) {
   await api.delete(`/tenders/${tenderId}/summary`)
 }
 
-export function exportUrl(filters: TenderFilters) {
+export async function downloadExport(filters: TenderFilters): Promise<void> {
   const params = new URLSearchParams()
   if (filters.q) params.set('q', filters.q)
   if (filters.status) params.set('status', filters.status)
   if (filters.it_category) params.set('it_category', filters.it_category)
-  return `${BASE}/tenders/export?${params}`
+  const r = await api.get(`/tenders/export?${params}`, { responseType: 'blob' })
+  const url = URL.createObjectURL(r.data as Blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'ausschreibungen.csv'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }

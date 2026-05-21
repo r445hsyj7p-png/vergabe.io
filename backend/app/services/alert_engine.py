@@ -1,14 +1,17 @@
+import logging
 import re
 import smtplib
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Tender, SearchProfile, Notification, Tag
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _matches(tender: Tender, profile: SearchProfile) -> bool:
@@ -40,6 +43,41 @@ def _matches(tender: Tender, profile: SearchProfile) -> bool:
     return True
 
 
+def _format_digest(profile_name: str, tenders: list[Tender]) -> str:
+    lines = [f'Neue Ausschreibungen für Ihr Suchprofil "{profile_name}":', ""]
+    for t in tenders[:10]:
+        deadline = t.deadline.strftime("%d.%m.%Y") if t.deadline else "—"
+        value = f"€{(t.value_max or 0) // 100:,}" if t.value_max else "—"
+        lines += [
+            f"• {t.title}",
+            f"  Auftraggeber: {t.contracting_authority or '—'}",
+            f"  Frist: {deadline} | Wert: {value}",
+            f"  URL: {t.source_url or '—'}",
+            "",
+        ]
+    if len(tenders) > 10:
+        lines.append(f"… und {len(tenders) - 10} weitere.")
+    return "\n".join(lines)
+
+
+def _send_email(to: str, subject: str, body: str) -> None:
+    if not settings.smtp_host:
+        return
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = settings.smtp_from
+        msg["To"] = to
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+            smtp.ehlo()
+            if settings.smtp_user:
+                smtp.starttls()
+                smtp.login(settings.smtp_user, settings.smtp_password)
+            smtp.sendmail(settings.smtp_from, [to], msg.as_string())
+    except Exception as exc:
+        logger.warning("Failed to send email to %s: %s", to, exc)
+
+
 async def run_alert_engine(db: AsyncSession, since: datetime | None = None) -> int:
     if since is None:
         since = datetime.now(timezone.utc) - timedelta(hours=6)
@@ -54,6 +92,7 @@ async def run_alert_engine(db: AsyncSession, since: datetime | None = None) -> i
 
     created = 0
     for profile in profiles:
+        new_tenders: list[Tender] = []
         for tender in tenders:
             if not _matches(tender, profile):
                 continue
@@ -69,6 +108,14 @@ async def run_alert_engine(db: AsyncSession, since: datetime | None = None) -> i
             )
             if result.scalar_one_or_none() is not None:
                 created += 1
+                new_tenders.append(tender)
+
+        if profile.email and new_tenders:
+            _send_email(
+                to=profile.email,
+                subject=f"[vergabe.io] {len(new_tenders)} neue Ausschreibung(en) für „{profile.name}"",
+                body=_format_digest(profile.name, new_tenders),
+            )
 
     await db.commit()
     return created
@@ -95,6 +142,7 @@ async def run_deadline_warnings(db: AsyncSession) -> int:
         if days_left not in warning_days:
             continue
 
+        notified_profiles: list[SearchProfile] = []
         for profile in profiles:
             notif_type = f"deadline_warning_{days_left}d"
             result = await db.execute(
@@ -109,6 +157,21 @@ async def run_deadline_warnings(db: AsyncSession) -> int:
             )
             if result.scalar_one_or_none() is not None:
                 created += 1
+                notified_profiles.append(profile)
+
+        for profile in notified_profiles:
+            if profile.email:
+                deadline_str = t.deadline.strftime("%d.%m.%Y")
+                _send_email(
+                    to=profile.email,
+                    subject=f"[vergabe.io] Frist in {days_left} Tag(en): {t.title[:60]}",
+                    body=(
+                        f"Erinnerung: Die Einreichungsfrist endet am {deadline_str}.\n\n"
+                        f"Ausschreibung: {t.title}\n"
+                        f"Auftraggeber: {t.contracting_authority or '—'}\n"
+                        f"URL: {t.source_url or '—'}\n"
+                    ),
+                )
 
     await db.commit()
     return created

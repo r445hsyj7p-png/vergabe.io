@@ -1,11 +1,13 @@
 {
-    email alexander.wyrwol@me.com
+    email {$ACME_EMAIL:admin@vergabe.io}
 }
 
 http://vergabe.cycl.group {
     handle /api/* {
         uri strip_prefix /api
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            header_up X-Forwarded-For {remote_host}
+        }
     }
 
     handle /auth/* {

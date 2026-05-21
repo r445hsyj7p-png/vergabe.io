@@ -134,25 +134,31 @@ export function TenderRow({ tender, index, selected, onClick, onTagChange }: Row
         >
           <button
             onClick={() => tagMut.mutate(tender.tag_status === 'interest' ? null : 'interest')}
-            className="px-2 py-1 rounded text-[11px] cursor-pointer"
+            disabled={tagMut.isPending}
+            className="px-2 py-1 rounded text-[11px]"
             style={{
               border: 'none',
               background: tender.tag_status === 'interest' ? 'var(--color-emerald-light)' : 'transparent',
               color: tender.tag_status === 'interest' ? 'var(--color-emerald)' : 'var(--color-ink2)',
+              opacity: tagMut.isPending ? 0.5 : 1,
+              cursor: tagMut.isPending ? 'default' : 'pointer',
             }}
           >
-            Interesse
+            {tagMut.isPending ? '…' : 'Interesse'}
           </button>
           <button
             onClick={() => tagMut.mutate(tender.tag_status === 'ignore' ? null : 'ignore')}
-            className="px-2 py-1 rounded text-[11px] cursor-pointer"
+            disabled={tagMut.isPending}
+            className="px-2 py-1 rounded text-[11px]"
             style={{
               border: 'none',
               background: tender.tag_status === 'ignore' ? 'var(--color-bg2)' : 'transparent',
               color: 'var(--color-ink2)',
+              opacity: tagMut.isPending ? 0.5 : 1,
+              cursor: tagMut.isPending ? 'default' : 'pointer',
             }}
           >
-            Ignorieren
+            {tagMut.isPending ? '…' : 'Ignorieren'}
           </button>
         </div>
       )}

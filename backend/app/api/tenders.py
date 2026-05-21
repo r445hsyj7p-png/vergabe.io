@@ -1,19 +1,22 @@
 import csv
 import io
+import logging
 import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, and_, or_, cast, String
+from sqlalchemy.dialects.postgresql import ARRAY as pgARRAY, array as pg_array
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
 from ..core.auth import require_auth
-from ..models import Tender, Tag, TenderSource, Source
+from ..models import Tender, Tag, TenderSource, SearchProfile
 from ..schemas import TenderOut, TenderDetailOut, TenderPage, TenderSourceOut, TagRequest
 
 router = APIRouter(prefix="/tenders", tags=["tenders"])
+logger = logging.getLogger(__name__)
 
 
 def _build_filter(q, stmt):
@@ -24,7 +27,9 @@ def _build_filter(q, stmt):
                 Tender.description.ilike(term))
         )
     if q.cpv:
-        stmt = stmt.where(cast(Tender.cpv_codes, String).ilike(f"%{q.cpv}%"))
+        stmt = stmt.where(
+            Tender.cpv_codes.op('@>')(cast(pg_array([q.cpv]), pgARRAY(String)))
+        )
     if q.region:
         stmt = stmt.where(Tender.region.ilike(f"%{q.region}%"))
     if q.auftraggeber:
@@ -38,6 +43,41 @@ def _build_filter(q, stmt):
     return stmt
 
 
+async def _apply_profile_filter(stmt, profile_id: uuid.UUID, db: AsyncSession):
+    profile = (await db.execute(
+        select(SearchProfile).where(SearchProfile.id == profile_id)
+    )).scalar_one_or_none()
+    if not profile:
+        return stmt
+    clauses = []
+    if profile.keywords:
+        kw_clauses = [
+            or_(
+                Tender.title.ilike(f"%{kw}%"),
+                Tender.description.ilike(f"%{kw}%"),
+                Tender.contracting_authority.ilike(f"%{kw}%"),
+            )
+            for kw in profile.keywords
+        ]
+        clauses.append(or_(*kw_clauses))
+    if profile.cpv_codes:
+        cpv_clauses = [
+            Tender.cpv_codes.op('@>')(cast(pg_array([c]), pgARRAY(String)))
+            for c in profile.cpv_codes
+        ]
+        clauses.append(or_(*cpv_clauses))
+    if profile.it_categories:
+        clauses.append(Tender.it_category.in_(profile.it_categories))
+    if profile.regions:
+        region_clauses = [Tender.region.ilike(f"%{r}%") for r in profile.regions]
+        clauses.append(or_(*region_clauses))
+    if profile.min_value:
+        clauses.append(Tender.value_max >= profile.min_value)
+    if clauses:
+        stmt = stmt.where(and_(*clauses))
+    return stmt
+
+
 @router.get("", response_model=TenderPage)
 async def list_tenders(
     q: Optional[str] = None,
@@ -48,7 +88,7 @@ async def list_tenders(
     status: Optional[str] = "open",
     min_value: Optional[int] = None,
     tag_status: Optional[str] = None,
-    profile_id: Optional[str] = None,
+    profile_id: Optional[uuid.UUID] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -69,7 +109,7 @@ async def list_tenders(
     if tag_status:
         stmt = stmt.join(Tag, and_(Tag.tender_id == Tender.id, Tag.status == tag_status))
     elif profile_id:
-        pass
+        stmt = await _apply_profile_filter(stmt, profile_id, db)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = (await db.execute(count_stmt)).scalar_one()
@@ -104,7 +144,11 @@ async def export_tenders(
 
     stmt = select(Tender)
     stmt = _build_filter(p, stmt)
-    stmt = stmt.order_by(Tender.deadline.asc().nulls_last()).limit(1000)
+    stmt = stmt.order_by(Tender.deadline.asc().nulls_last())
+
+    def generate():
+        yield "ID,Titel,Auftraggeber,Deadline,Wert (€),Region,IT-Kategorie,URL\r\n"
+
     rows = (await db.execute(stmt)).scalars().all()
 
     buf = io.StringIO()

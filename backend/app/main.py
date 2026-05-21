@@ -58,7 +58,9 @@ app.include_router(admin.router)
 
 @app.post("/auth/token", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request):
-    ip = request.client.host if request.client else "unknown"
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
     if not _check_rate_limit(ip):
         raise HTTPException(429, "Too many login attempts, try again in a minute")
     if body.password != settings.admin_password:

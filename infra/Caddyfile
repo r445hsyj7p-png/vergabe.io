@@ -9,7 +9,9 @@ http://vergabe.cycl.group {
     }
 
     handle /auth/* {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            header_up X-Forwarded-For {remote_host}
+        }
     }
 
     handle /docs* {

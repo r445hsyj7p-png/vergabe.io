@@ -74,7 +74,7 @@ services:
     environment:
       ACME_EMAIL: ${ACME_EMAIL:-admin@vergabe.io}
     ports:
-      - "8080:80"
+      - "${HOST_PORT:-8888}:80"
     volumes:
       - caddy_data:/data
       - caddy_config:/config

@@ -37,7 +37,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-changeme}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       APP_ENV: production
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://vergabe.cycl.group}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://vergabe.cycl.group,https://vergabe.cycl.group}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       SUMMARY_PROVIDER: ${SUMMARY_PROVIDER:-anthropic}
       SMTP_HOST: ${SMTP_HOST:-}
@@ -66,18 +66,13 @@ services:
       target: production
     restart: always
 
-  # ── Reverse proxy + TLS ──────────────────────────────────────────────────
-  caddy:
+  # ── Reverse proxy ────────────────────────────────────────────────────────
+  nginx:
     build:
       context: ./infra
       dockerfile: Dockerfile
-    environment:
-      ACME_EMAIL: ${ACME_EMAIL:-admin@vergabe.io}
     ports:
       - "${HOST_PORT:-8888}:80"
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
     depends_on:
       - backend
       - frontend
@@ -85,5 +80,3 @@ services:
 
 volumes:
   postgres_data:
-  caddy_data:
-  caddy_config:

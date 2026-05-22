@@ -2,7 +2,7 @@
     email {$ACME_EMAIL:admin@vergabe.io}
 }
 
-http://vergabe.cycl.group {
+http://vergabe.cycl.group, :80 {
     handle /api/* {
         uri strip_prefix /api
         reverse_proxy backend:8000 {

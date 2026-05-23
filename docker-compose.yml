@@ -35,7 +35,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${DB_USER:-vergabe}:${DB_PASSWORD:-vergabe}@postgres:5432/${DB_NAME:-vergabe}
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-changeme}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
       APP_ENV: production
       CORS_ORIGINS: ${CORS_ORIGINS:-http://vergabe.cycl.group,https://vergabe.cycl.group}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

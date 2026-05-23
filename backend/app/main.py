@@ -2,13 +2,19 @@ import logging
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .core.config import settings
 from .core.auth import create_access_token
+from .core.database import get_db
+from .core.password import verify_password
+from .models import AppSetting
 from .schemas import LoginRequest, TokenResponse
 from .api import tenders, profiles, notifications, admin
+from .api.setup import router as setup_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(setup_router)
 app.include_router(tenders.router)
 app.include_router(profiles.router)
 app.include_router(notifications.router)
@@ -66,14 +73,20 @@ app.include_router(admin.router)
 
 
 @app.post("/auth/token", response_model=TokenResponse)
-async def login(body: LoginRequest, request: Request):
+async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
         request.client.host if request.client else "unknown"
     )
     if not _check_rate_limit(ip):
         raise HTTPException(429, "Too many login attempts, try again in a minute")
-    if body.password != settings.admin_password:
+
+    row = (await db.execute(
+        select(AppSetting).where(AppSetting.key == "admin_password_hash")
+    )).scalar_one_or_none()
+
+    if not row or not verify_password(body.password, row.value):
         raise HTTPException(401, "Invalid password")
+
     return TokenResponse(access_token=create_access_token())
 
 

@@ -27,6 +27,15 @@ api.interceptors.response.use(
   }
 )
 
+export async function fetchSetupStatus() {
+  const r = await api.get('/setup')
+  return r.data as { setup_required: boolean }
+}
+
+export async function completeSetup(password: string) {
+  await api.post('/setup', { password })
+}
+
 export async function login(password: string) {
   const r = await api.post('/auth/token', { password })
   return r.data as { access_token: string; token_type: string }

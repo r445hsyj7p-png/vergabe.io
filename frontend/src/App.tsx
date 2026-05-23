@@ -1,8 +1,10 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { LoginPage } from './pages/LoginPage'
 import { SearchPage } from './pages/SearchPage'
 import { AdminPage } from './pages/AdminPage'
+import { SetupPage } from './pages/SetupPage'
+import { fetchSetupStatus } from './api/client'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -42,6 +44,24 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [setupRequired, setSetupRequired] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetchSetupStatus()
+      .then((s) => setSetupRequired(s.setup_required))
+      .catch(() => setSetupRequired(false))
+  }, [])
+
+  if (setupRequired === null) return null
+
+  if (setupRequired) {
+    return (
+      <ErrorBoundary>
+        <SetupPage onDone={() => setSetupRequired(false)} />
+      </ErrorBoundary>
+    )
+  }
+
   return (
     <ErrorBoundary>
       <Routes>

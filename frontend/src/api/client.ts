@@ -19,7 +19,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response?.status === 401) {
+    // Don't redirect on 401 for setup/auth endpoints themselves
+    const url = err.config?.url ?? ''
+    if (err.response?.status === 401 && !url.includes('/setup') && !url.includes('/auth/')) {
       sessionStorage.removeItem('vergabe_token')
       window.location.href = '/login'
     }

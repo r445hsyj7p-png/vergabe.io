@@ -7,7 +7,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://vergabe:vergabe@postgres:5432/vergabe"
     redis_url: str = "redis://redis:6379/0"
     secret_key: str = "changeme"
-    admin_password: str = "admin"
     app_env: str = "development"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     anthropic_api_key: str = ""
@@ -23,13 +22,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def check_production_secrets(self) -> "Settings":
-        if self.app_env == "production":
-            if self.secret_key in ("changeme", ""):
-                import warnings
-                warnings.warn("SECRET_KEY is using an insecure default — set SECRET_KEY env var")
-            if self.admin_password in ("admin", ""):
-                import warnings
-                warnings.warn("ADMIN_PASSWORD is using an insecure default — set ADMIN_PASSWORD env var")
+        if self.app_env == "production" and self.secret_key in ("changeme", ""):
+            import warnings
+            warnings.warn("SECRET_KEY is using an insecure default — set SECRET_KEY env var")
         return self
 
     @property

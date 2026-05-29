@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
@@ -31,12 +32,16 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 
 @router.post("/setup", status_code=201)
 async def complete_setup(body: SetupRequest, db: AsyncSession = Depends(get_db)):
-    existing = (await db.execute(
-        select(AppSetting).where(AppSetting.key == "admin_password_hash")
-    )).scalar_one_or_none()
-    if existing:
+    stmt = (
+        pg_insert(AppSetting)
+        .values(key="admin_password_hash", value=hash_password(body.password))
+        .on_conflict_do_nothing(index_elements=["key"])
+        .returning(AppSetting.key)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+
+    if result.fetchone() is None:
         raise HTTPException(409, "Setup wurde bereits abgeschlossen")
 
-    db.add(AppSetting(key="admin_password_hash", value=hash_password(body.password)))
-    await db.commit()
     return {"ok": True}

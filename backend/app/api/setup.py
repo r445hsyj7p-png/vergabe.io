@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +13,7 @@ router = APIRouter(tags=["setup"])
 
 class SetupRequest(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     password: str
 
     @field_validator("name")
@@ -22,6 +22,14 @@ class SetupRequest(BaseModel):
         if not v.strip():
             raise ValueError("Name darf nicht leer sein")
         return v.strip()
+
+    @field_validator("email")
+    @classmethod
+    def email_valid(cls, v: str) -> str:
+        v = v.strip().lower()
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("Ungültige E-Mail-Adresse")
+        return v
 
     @field_validator("password")
     @classmethod
@@ -60,8 +68,8 @@ async def complete_setup(body: SetupRequest, db: AsyncSession = Depends(get_db))
     )
     await db.execute(
         pg_insert(AppSetting)
-        .values(key="admin_email", value=body.email.lower())
-        .on_conflict_do_update(index_elements=["key"], set_={"value": body.email.lower()})
+        .values(key="admin_email", value=body.email)
+        .on_conflict_do_update(index_elements=["key"], set_={"value": body.email})
     )
     await db.commit()
 

@@ -5,9 +5,6 @@ Revises:
 Create Date: 2025-01-01
 """
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.dialects import postgresql
 
 revision = "001"
 down_revision = None
@@ -15,14 +12,9 @@ branch_labels = None
 depends_on = None
 
 
-def _table_exists(name: str) -> bool:
-    return sa_inspect(op.get_bind()).has_table(name)
-
-
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
-    # Enums — DO/EXCEPTION macht sie idempotent (kein IF NOT EXISTS für ENUM in PG)
     op.execute("""
         DO $$ BEGIN
             CREATE TYPE source_status AS ENUM ('ok', 'warn', 'error', 'inactive');
@@ -48,171 +40,181 @@ def upgrade() -> None:
         END $$
     """)
 
-    if not _table_exists("sources"):
-        op.create_table("sources",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("name", sa.String(200), nullable=False),
-            sa.Column("slug", sa.String(100), unique=True, nullable=False),
-            sa.Column("source_type", sa.String(50), nullable=False),
-            sa.Column("base_url", sa.Text),
-            sa.Column("scraper_class", sa.String(100)),
-            sa.Column("config", postgresql.JSONB),
-            sa.Column("interval_hours", sa.Integer, server_default="6"),
-            sa.Column("is_active", sa.Boolean, server_default="true"),
-            sa.Column("status", sa.Enum("ok", "warn", "error", "inactive", name="source_status", create_type=False), server_default="ok"),
-            sa.Column("last_run_at", sa.DateTime(timezone=True)),
-            sa.Column("last_run_entries", sa.Integer, server_default="0"),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS sources (
+            id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name          VARCHAR(200) NOT NULL,
+            slug          VARCHAR(100) NOT NULL UNIQUE,
+            source_type   VARCHAR(50)  NOT NULL,
+            base_url      TEXT,
+            scraper_class VARCHAR(100),
+            config        JSONB,
+            interval_hours INTEGER NOT NULL DEFAULT 6,
+            is_active     BOOLEAN NOT NULL DEFAULT true,
+            status        source_status NOT NULL DEFAULT 'ok',
+            last_run_at   TIMESTAMPTZ,
+            last_run_entries INTEGER NOT NULL DEFAULT 0
         )
+    """)
 
-    if not _table_exists("tenders"):
-        op.create_table("tenders",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("canonical_id", postgresql.UUID(as_uuid=True), unique=True, nullable=False),
-            sa.Column("title", sa.Text, nullable=False),
-            sa.Column("description", sa.Text),
-            sa.Column("contracting_authority", sa.String(500)),
-            sa.Column("authority_address", sa.Text),
-            sa.Column("authority_email", sa.String(300)),
-            sa.Column("authority_phone", sa.String(100)),
-            sa.Column("deadline", sa.DateTime(timezone=True)),
-            sa.Column("publication_date", sa.DateTime(timezone=True)),
-            sa.Column("value_min", sa.BigInteger),
-            sa.Column("value_max", sa.BigInteger),
-            sa.Column("currency", sa.String(10), server_default="'EUR'"),
-            sa.Column("cpv_codes", postgresql.ARRAY(sa.String)),
-            sa.Column("it_category", sa.String(100)),
-            sa.Column("region", sa.String(200)),
-            sa.Column("country", sa.String(10), server_default="'DE'"),
-            sa.Column("procedure_type", sa.String(200)),
-            sa.Column("tender_status", sa.Enum("open", "closed", "cancelled", name="tender_status", create_type=False), server_default="open"),
-            sa.Column("fulfillment_location", sa.String(300)),
-            sa.Column("external_id", sa.String(300)),
-            sa.Column("source_url", sa.Text),
-            sa.Column("content_hash", sa.String(64)),
-            sa.Column("raw_data", postgresql.JSONB),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS tenders (
+            id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            canonical_id          UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+            title                 TEXT NOT NULL,
+            description           TEXT,
+            contracting_authority VARCHAR(500),
+            authority_address     TEXT,
+            authority_email       VARCHAR(300),
+            authority_phone       VARCHAR(100),
+            deadline              TIMESTAMPTZ,
+            publication_date      TIMESTAMPTZ,
+            value_min             BIGINT,
+            value_max             BIGINT,
+            currency              VARCHAR(10)  NOT NULL DEFAULT 'EUR',
+            cpv_codes             VARCHAR[],
+            it_category           VARCHAR(100),
+            region                VARCHAR(200),
+            country               VARCHAR(10)  NOT NULL DEFAULT 'DE',
+            procedure_type        VARCHAR(200),
+            tender_status         tender_status NOT NULL DEFAULT 'open',
+            fulfillment_location  VARCHAR(300),
+            external_id           VARCHAR(300),
+            source_url            TEXT,
+            content_hash          VARCHAR(64),
+            raw_data              JSONB,
+            created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-        op.create_index("ix_tenders_deadline", "tenders", ["deadline"])
-        op.create_index("ix_tenders_it_category", "tenders", ["it_category"])
-        op.create_index("ix_tenders_status", "tenders", ["tender_status"])
-        op.create_index("ix_tenders_created_at", "tenders", ["created_at"])
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tenders_deadline    ON tenders (deadline)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tenders_it_category ON tenders (it_category)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tenders_status      ON tenders (tender_status)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tenders_created_at  ON tenders (created_at)")
 
-    if not _table_exists("tender_sources"):
-        op.create_table("tender_sources",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("tender_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("source_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("sources.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("external_url", sa.Text),
-            sa.Column("external_id", sa.String(300)),
-            sa.Column("platform_name", sa.String(200)),
-            sa.Column("scraped_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.UniqueConstraint("tender_id", "source_id"),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS tender_sources (
+            id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tender_id    UUID NOT NULL REFERENCES tenders(id)  ON DELETE CASCADE,
+            source_id    UUID NOT NULL REFERENCES sources(id)  ON DELETE CASCADE,
+            external_url TEXT,
+            external_id  VARCHAR(300),
+            platform_name VARCHAR(200),
+            scraped_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE (tender_id, source_id)
         )
+    """)
 
-    if not _table_exists("lots"):
-        op.create_table("lots",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("tender_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("lot_number", sa.String(50)),
-            sa.Column("title", sa.Text),
-            sa.Column("description", sa.Text),
-            sa.Column("value_min", sa.BigInteger),
-            sa.Column("value_max", sa.BigInteger),
-            sa.Column("cpv_codes", postgresql.ARRAY(sa.String)),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS lots (
+            id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tender_id  UUID NOT NULL REFERENCES tenders(id) ON DELETE CASCADE,
+            lot_number VARCHAR(50),
+            title      TEXT,
+            description TEXT,
+            value_min  BIGINT,
+            value_max  BIGINT,
+            cpv_codes  VARCHAR[]
         )
+    """)
 
-    if not _table_exists("search_profiles"):
-        op.create_table("search_profiles",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("name", sa.String(200), nullable=False),
-            sa.Column("keywords", postgresql.ARRAY(sa.Text)),
-            sa.Column("cpv_codes", postgresql.ARRAY(sa.String)),
-            sa.Column("regions", postgresql.ARRAY(sa.String)),
-            sa.Column("it_categories", postgresql.ARRAY(sa.String)),
-            sa.Column("min_value", sa.BigInteger),
-            sa.Column("deadline_days", sa.Integer),
-            sa.Column("email", sa.String(300)),
-            sa.Column("is_active", sa.Boolean, server_default="true"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS search_profiles (
+            id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name          VARCHAR(200) NOT NULL,
+            keywords      TEXT[],
+            cpv_codes     VARCHAR[],
+            regions       VARCHAR[],
+            it_categories VARCHAR[],
+            min_value     BIGINT,
+            deadline_days INTEGER,
+            email         VARCHAR(300),
+            is_active     BOOLEAN NOT NULL DEFAULT true,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
         )
+    """)
 
-    if not _table_exists("tags"):
-        op.create_table("tags",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("tender_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), unique=True, nullable=False),
-            sa.Column("status", sa.Enum("interest", "ignore", name="tag_status", create_type=False), nullable=False),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS tags (
+            id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tender_id  UUID NOT NULL UNIQUE REFERENCES tenders(id) ON DELETE CASCADE,
+            status     tag_status NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
+    """)
 
-    if not _table_exists("notifications"):
-        op.create_table("notifications",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("profile_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("search_profiles.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("tender_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("is_read", sa.Boolean, server_default="false"),
-            sa.Column("notification_type", sa.String(50), nullable=False),
-            sa.Column("triggered_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.UniqueConstraint("profile_id", "tender_id", "notification_type"),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            profile_id        UUID NOT NULL REFERENCES search_profiles(id) ON DELETE CASCADE,
+            tender_id         UUID NOT NULL REFERENCES tenders(id)         ON DELETE CASCADE,
+            is_read           BOOLEAN NOT NULL DEFAULT false,
+            notification_type VARCHAR(50) NOT NULL,
+            triggered_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE (profile_id, tender_id, notification_type)
         )
+    """)
 
-    if not _table_exists("crawl_logs"):
-        op.create_table("crawl_logs",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("source_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("sources.id", ondelete="SET NULL")),
-            sa.Column("level", sa.String(10), server_default="'info'"),
-            sa.Column("message", sa.Text, nullable=False),
-            sa.Column("entries_processed", sa.Integer, server_default="0"),
-            sa.Column("entries_new", sa.Integer, server_default="0"),
-            sa.Column("duration_ms", sa.Integer),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS crawl_logs (
+            id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            source_id        UUID REFERENCES sources(id) ON DELETE SET NULL,
+            level            VARCHAR(10)  NOT NULL DEFAULT 'info',
+            message          TEXT NOT NULL,
+            entries_processed INTEGER NOT NULL DEFAULT 0,
+            entries_new       INTEGER NOT NULL DEFAULT 0,
+            duration_ms       INTEGER,
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
         )
+    """)
 
-    if not _table_exists("komunen_sources"):
-        op.create_table("komunen_sources",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("ags", sa.String(20)),
-            sa.Column("name", sa.String(300), nullable=False),
-            sa.Column("bundesland", sa.String(100)),
-            sa.Column("einwohner", sa.Integer),
-            sa.Column("main_url", sa.Text),
-            sa.Column("vergabe_url", sa.Text),
-            sa.Column("discovery_confidence", sa.Float),
-            sa.Column("status", sa.Enum("auto", "verified", "excluded", "pending_review", name="komunen_status", create_type=False), server_default="auto"),
-            sa.Column("last_verified_at", sa.DateTime(timezone=True)),
-            sa.Column("last_scraped_at", sa.DateTime(timezone=True)),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS komunen_sources (
+            id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            ags                  VARCHAR(20),
+            name                 VARCHAR(300) NOT NULL,
+            bundesland           VARCHAR(100),
+            einwohner            INTEGER,
+            main_url             TEXT,
+            vergabe_url          TEXT,
+            discovery_confidence FLOAT,
+            status               komunen_status NOT NULL DEFAULT 'auto',
+            last_verified_at     TIMESTAMPTZ,
+            last_scraped_at      TIMESTAMPTZ,
+            created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
         )
-        op.create_index("ix_komunen_status", "komunen_sources", ["status"])
-        op.create_index("ix_komunen_bundesland", "komunen_sources", ["bundesland"])
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_komunen_status     ON komunen_sources (status)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_komunen_bundesland ON komunen_sources (bundesland)")
 
-    if not _table_exists("tender_summaries"):
-        op.create_table("tender_summaries",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column("tender_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tenders.id", ondelete="CASCADE"), unique=True, nullable=False),
-            sa.Column("summary_text", sa.Text, nullable=False),
-            sa.Column("provider", sa.String(50), nullable=False),
-            sa.Column("model", sa.String(100)),
-            sa.Column("cost_cents", sa.Integer, server_default="0"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS tender_summaries (
+            id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tender_id    UUID NOT NULL UNIQUE REFERENCES tenders(id) ON DELETE CASCADE,
+            summary_text TEXT NOT NULL,
+            provider     VARCHAR(50)  NOT NULL,
+            model        VARCHAR(100),
+            cost_cents   INTEGER NOT NULL DEFAULT 0,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
         )
+    """)
 
 
 def downgrade() -> None:
-    op.drop_table("tender_summaries")
-    op.drop_table("komunen_sources")
-    op.drop_table("crawl_logs")
-    op.drop_table("notifications")
-    op.drop_table("tags")
-    op.drop_table("search_profiles")
-    op.drop_table("lots")
-    op.drop_table("tender_sources")
-    op.drop_table("tenders")
-    op.drop_table("sources")
+    op.execute("DROP TABLE IF EXISTS tender_summaries")
+    op.execute("DROP TABLE IF EXISTS komunen_sources")
+    op.execute("DROP TABLE IF EXISTS crawl_logs")
+    op.execute("DROP TABLE IF EXISTS notifications")
+    op.execute("DROP TABLE IF EXISTS tags")
+    op.execute("DROP TABLE IF EXISTS search_profiles")
+    op.execute("DROP TABLE IF EXISTS lots")
+    op.execute("DROP TABLE IF EXISTS tender_sources")
+    op.execute("DROP TABLE IF EXISTS tenders")
+    op.execute("DROP TABLE IF EXISTS sources")
     op.execute("DROP TYPE IF EXISTS komunen_status")
     op.execute("DROP TYPE IF EXISTS tag_status")
     op.execute("DROP TYPE IF EXISTS tender_status")

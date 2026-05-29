@@ -5,8 +5,6 @@ Revises: 001
 Create Date: 2025-01-02
 """
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy import inspect as sa_inspect
 
 revision = "002"
 down_revision = "001"
@@ -15,13 +13,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    if not sa_inspect(op.get_bind()).has_table("app_settings"):
-        op.create_table(
-            "app_settings",
-            sa.Column("key", sa.String(100), primary_key=True),
-            sa.Column("value", sa.Text, nullable=False),
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   VARCHAR(100) PRIMARY KEY,
+            value TEXT NOT NULL
         )
+    """)
 
 
 def downgrade() -> None:
-    op.drop_table("app_settings")
+    op.execute("DROP TABLE IF EXISTS app_settings")

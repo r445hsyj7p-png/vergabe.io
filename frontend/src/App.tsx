@@ -45,7 +45,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 
 type AppState = 'loading' | 'setup' | 'ready' | 'error'
 
-async function pollSetupStatus(retries = 8, delayMs = 1500): Promise<boolean> {
+async function pollSetupStatus(retries = 5, delayMs = 2000): Promise<boolean> {
   for (let i = 0; i < retries; i++) {
     try {
       const s = await fetchSetupStatus()

@@ -8,7 +8,7 @@ import type {
 
 const BASE = import.meta.env.VITE_API_URL || '/api'
 
-export const api = axios.create({ baseURL: BASE })
+export const api = axios.create({ baseURL: BASE, timeout: 8000 })
 
 api.interceptors.request.use((config) => {
   const token = sessionStorage.getItem('vergabe_token')

@@ -80,12 +80,20 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
     if not _check_rate_limit(ip):
         raise HTTPException(429, "Too many login attempts, try again in a minute")
 
-    row = (await db.execute(
-        select(AppSetting).where(AppSetting.key == "admin_password_hash")
-    )).scalar_one_or_none()
+    rows = (await db.execute(
+        select(AppSetting).where(AppSetting.key.in_(["admin_password_hash", "admin_email"]))
+    )).scalars().all()
+    settings_map = {r.key: r.value for r in rows}
 
-    if not row or not verify_password(body.password, row.value):
-        raise HTTPException(401, "Invalid password")
+    stored_email = settings_map.get("admin_email", "")
+    stored_hash = settings_map.get("admin_password_hash", "")
+
+    if (
+        not stored_hash
+        or body.email.lower() != stored_email
+        or not verify_password(body.password, stored_hash)
+    ):
+        raise HTTPException(401, "E-Mail oder Passwort falsch")
 
     return TokenResponse(access_token=create_access_token())
 

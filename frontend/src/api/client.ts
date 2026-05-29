@@ -34,12 +34,12 @@ export async function fetchSetupStatus() {
   return r.data as { setup_required: boolean }
 }
 
-export async function completeSetup(password: string) {
-  await api.post('/setup', { password })
+export async function completeSetup(name: string, email: string, password: string) {
+  await api.post('/setup', { name, email, password })
 }
 
-export async function login(password: string) {
-  const r = await api.post('/auth/token', { password })
+export async function login(email: string, password: string) {
+  const r = await api.post('/auth/token', { email, password })
   return r.data as { access_token: string; token_type: string }
 }
 

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,16 @@ router = APIRouter(tags=["setup"])
 
 
 class SetupRequest(BaseModel):
+    name: str
+    email: EmailStr
     password: str
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Name darf nicht leer sein")
+        return v.strip()
 
     @field_validator("password")
     @classmethod
@@ -39,9 +48,21 @@ async def complete_setup(body: SetupRequest, db: AsyncSession = Depends(get_db))
         .returning(AppSetting.key)
     )
     result = await db.execute(stmt)
-    await db.commit()
 
     if result.fetchone() is None:
+        await db.rollback()
         raise HTTPException(409, "Setup wurde bereits abgeschlossen")
+
+    await db.execute(
+        pg_insert(AppSetting)
+        .values(key="admin_name", value=body.name)
+        .on_conflict_do_update(index_elements=["key"], set_={"value": body.name})
+    )
+    await db.execute(
+        pg_insert(AppSetting)
+        .values(key="admin_email", value=body.email.lower())
+        .on_conflict_do_update(index_elements=["key"], set_={"value": body.email.lower()})
+    )
+    await db.commit()
 
     return {"ok": True}

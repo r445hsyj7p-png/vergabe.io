@@ -1,8 +1,48 @@
 import re
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
+
+_IT_CPV_PREFIXES = ("72", "48", "73", "64", "79", "50332", "32")
+_IT_KEYWORDS = [
+    "software", "it-", " it ", "edv", "digital", "cloud", "cyber",
+    "sicherheit", "infrastruktur", "entwicklung", "netzwerk", "server",
+    "hosting", "datacenter", "rechenzentrum", "portal", "plattform",
+]
+
+_DT_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%SZ",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+    "%d.%m.%Y %H:%M",
+    "%d.%m.%Y",
+    "%a, %d %b %Y %H:%M:%S %z",
+    "%a, %d %b %Y %H:%M:%S GMT",
+)
+
+
+def parse_dt(s: str | None) -> datetime | None:
+    """Parse a datetime string in any common format, always returning UTC."""
+    if not s:
+        return None
+    s = s.strip()
+    for fmt in _DT_FORMATS:
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def is_it_relevant(title: str, description: str | None = None, cpv_codes: list | None = None) -> bool:
+    """Return True if the tender appears IT-related by CPV or keywords."""
+    if cpv_codes and any(c.startswith(p) for c in cpv_codes for p in _IT_CPV_PREFIXES):
+        return True
+    combined = f"{title} {description or ''}".lower()
+    return any(k in combined for k in _IT_KEYWORDS)
 
 # IT category detection: CPV prefix → category
 CPV_MAP = {

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
-from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes
+from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
 _HEADERS = {"User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)"}
@@ -36,29 +36,6 @@ _PUB_PATHS = [
     "/ausschreibungen",
 ]
 
-_IT_CPV = ("72", "48", "73", "64", "79")
-_IT_KW = ["software", "it-", " it ", "edv", "digital", "cloud", "cyber",
-           "sicherheit", "infrastruktur", "entwicklung", "netzwerk", "server", "hosting"]
-
-
-def _is_it(text: str) -> bool:
-    cpv = extract_cpv_codes(text)
-    if any(c.startswith(p) for c in cpv for p in _IT_CPV):
-        return True
-    low = text.lower()
-    return any(k in low for k in _IT_KW)
-
-
-def _parse_dt(s: str | None) -> datetime | None:
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%d.%m.%Y %H:%M", "%d.%m.%Y", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(s.strip(), fmt)
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return None
 
 
 def _scrape_netserver_html(html: str, base_url: str) -> list[NormalizedTender]:
@@ -83,7 +60,7 @@ def _scrape_netserver_html(html: str, base_url: str) -> list[NormalizedTender]:
                 continue
             url = href if href.startswith("http") else base_url + href
             combined = title
-            if not _is_it(combined):
+            if not is_it_relevant(combined):
                 continue
             results.append(NormalizedTender(
                 title=title[:500],
@@ -104,13 +81,13 @@ def _scrape_netserver_html(html: str, base_url: str) -> list[NormalizedTender]:
         if not title or len(title) < 5:
             continue
         combined = f"{title} {text}"
-        if not _is_it(combined):
+        if not is_it_relevant(combined):
             continue
         link = title_tag.get("href", "") if title_tag and title_tag.name == "a" else ""
         url = link if link.startswith("http") else (base_url + link if link else None)
         cpv = extract_cpv_codes(combined)
         deadline_m = re.search(r"(\d{2}\.\d{2}\.\d{4})", text)
-        deadline = _parse_dt(deadline_m.group(1) if deadline_m else None)
+        deadline = parse_dt(deadline_m.group(1) if deadline_m else None)
         results.append(NormalizedTender(
             title=title[:500],
             source_slug="sachsen",
@@ -138,17 +115,21 @@ class SachsenCrawler:
         processed = new = 0
         found = False
 
+        ip_blocked = False
         async with httpx.AsyncClient(timeout=20, headers=_HEADERS, follow_redirects=True) as client:
             for base in _NETSERVER_BASES:
+                if ip_blocked:
+                    break
                 for path in _PUB_PATHS:
                     try:
                         r = await client.get(f"{base}{path}")
                         if r.status_code == 403:
-                            msg = f"Sachsen: Zugriff verweigert (403) auf {base}{path}"
+                            msg = f"Sachsen: Zugriff verweigert (403) — Server-IP blockiert"
                             if source:
                                 source.status = "warn"
                                 db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
                                 await db.commit()
+                            ip_blocked = True
                             break
                         if r.status_code != 200:
                             continue

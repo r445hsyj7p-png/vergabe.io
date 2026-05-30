@@ -47,12 +47,18 @@ async def _job_berlin():
 
 async def _job_sachsen():
     from ..crawler.sources.sachsen import SachsenCrawler
+    from ..services.alert_engine import run_alert_engine
     await SachsenCrawler().run()
+    async with AsyncSessionLocal() as db:
+        await run_alert_engine(db)
 
 
 async def _job_had():
     from ..crawler.sources.had import HadCrawler
+    from ..services.alert_engine import run_alert_engine
     await HadCrawler().run()
+    async with AsyncSessionLocal() as db:
+        await run_alert_engine(db)
 
 
 async def _job_deadline_warnings():

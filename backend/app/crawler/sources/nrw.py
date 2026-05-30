@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
-from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes
+from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
 API_BASE = "https://daten.vergabe.nrw.de/rest/evergabe"
@@ -31,8 +31,6 @@ _HEADERS = {
 }
 
 # IT-relevante CPV-Präfixe
-_IT_CPV = ("72", "48", "73", "64", "79")
-
 # Mögliche Feldnamen in der API-Antwort (NRW-Datenbank nutzt deutsche Feldnamen)
 _FIELD_TITLE = ("titel", "bezeichnung", "betreff", "title", "beschreibung_kurz")
 _FIELD_AUTHORITY = ("auftraggeber", "vergabestelle", "auftraggeber_name", "contracting_authority")
@@ -52,25 +50,6 @@ def _get(d: dict, *keys) -> str | None:
     return None
 
 
-def _parse_dt(s: str | None) -> datetime | None:
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d", "%d.%m.%Y"):
-        try:
-            dt = datetime.strptime(s[:19], fmt[:len(s)])
-        except (ValueError, TypeError):
-            try:
-                dt = datetime.strptime(s, fmt)
-                return dt.replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-    return None
-
-
-def _is_it(cpv_list: list[str]) -> bool:
-    return any(c.startswith(p) for c in cpv_list for p in _IT_CPV)
-
-
 def _parse_item(item: dict) -> NormalizedTender | None:
     title = _get(item, *_FIELD_TITLE)
     if not title:
@@ -82,7 +61,7 @@ def _parse_item(item: dict) -> NormalizedTender | None:
     if not cpv_codes:
         cpv_codes = extract_cpv_codes(str(item))
 
-    if not _is_it(cpv_codes):
+    if not is_it_relevant(cpv_codes):
         return None
 
     notice_id = _get(item, *_FIELD_ID)
@@ -92,8 +71,8 @@ def _parse_item(item: dict) -> NormalizedTender | None:
     desc = _get(item, "beschreibung", "leistungsbeschreibung", "description", "text")
 
     authority = _get(item, *_FIELD_AUTHORITY)
-    deadline = _parse_dt(_get(item, *_FIELD_DEADLINE))
-    pub_date = _parse_dt(_get(item, *_FIELD_PUBDATE))
+    deadline = parse_dt(_get(item, *_FIELD_DEADLINE))
+    pub_date = parse_dt(_get(item, *_FIELD_PUBDATE))
 
     value_raw = _get(item, *_FIELD_VALUE)
     value_max = None

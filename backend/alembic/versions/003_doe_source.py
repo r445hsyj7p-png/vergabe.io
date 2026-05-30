@@ -28,4 +28,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DELETE FROM sources WHERE slug IN ('doe', 'nrw', 'berlin')")
+    op.execute("DELETE FROM sources WHERE slug IN ('ted', 'bund', 'doe', 'nrw', 'berlin', 'sachsen', 'had')")

@@ -74,9 +74,12 @@ class TedCrawler:
                 consecutive_errors = 0
                 notices = data.get("notices") or data.get("items") or data.get("results") or []
                 if page == 1 and not notices:
-                    total_found = data.get("total", data.get("totalNotices", "?"))
+                    api_total = data.get("total", data.get("totalNotices", "unbekannt"))
                     if source:
                         source.status = "warn"
+                        db.add(CrawlLog(source_id=source.id, level="warn",
+                                        message=f"TED: Seite 1 leer (API meldet {api_total} Treffer) — Query ggf. prüfen"))
+                        await db.commit()
                     break
 
                 for notice in notices:
@@ -107,7 +110,8 @@ class TedCrawler:
         if source:
             source.last_run_at = datetime.now(timezone.utc)
             source.last_run_entries = new
-            source.status = "ok"
+            if source.status != "warn":
+                source.status = "ok"
         await db.commit()
         return new
 

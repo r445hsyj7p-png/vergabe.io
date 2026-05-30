@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
-from ..pipeline.normalizer import NormalizedTender
+from ..pipeline.normalizer import NormalizedTender, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
 API_BASE = "https://oeffentlichevergabe.de"
@@ -39,7 +39,6 @@ MAX_PAGES = 40  # 2.000 Notices max pro Lauf
 SLEEP_S = 1.0
 
 # IT-relevante CPV-Präfixe
-IT_CPV_PREFIXES = ("72", "48", "73", "64", "79", "50332", "32")
 
 _HEADERS = {
     "User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)",
@@ -58,20 +57,8 @@ def _prefer(obj: dict | None, keys: tuple = ("de", "DE", "en", "EN")) -> str | N
     return next(iter(obj.values()), None) if obj else None
 
 
-def _parse_dt(s: str | None) -> datetime | None:
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(s[:19] if "+" in s else s, fmt)
-            return dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return None
-
-
 def _is_it_relevant(cpv_ids: list[str]) -> bool:
-    return any(c.startswith(p) for c in cpv_ids for p in IT_CPV_PREFIXES)
+    return is_it_relevant("", cpv_codes=cpv_ids)
 
 
 def _parse_ocds_release(release: dict) -> NormalizedTender | None:
@@ -81,15 +68,16 @@ def _parse_ocds_release(release: dict) -> NormalizedTender | None:
     if not title or not isinstance(title, str):
         return None
 
-    # CPV-Codes aus items[].classification
+    # CPV-Codes: tender-level classification + items[].classification
     cpv_ids: list[str] = []
+    def _extract_cpv(cls_obj: dict) -> None:
+        if cls_obj and cls_obj.get("scheme", "").upper() == "CPV" and cls_obj.get("id"):
+            cpv_ids.append(str(cls_obj["id"]).replace("-", "")[:8])
+    _extract_cpv(tender_block.get("classification") or {})
     for item in tender_block.get("items") or []:
-        cls = item.get("classification") or {}
-        if cls.get("scheme", "").upper() == "CPV" and cls.get("id"):
-            cpv_ids.append(str(cls["id"]).replace("-", "")[:8])
+        _extract_cpv(item.get("classification") or {})
         for add_cls in item.get("additionalClassifications") or []:
-            if add_cls.get("scheme", "").upper() == "CPV" and add_cls.get("id"):
-                cpv_ids.append(str(add_cls["id"]).replace("-", "")[:8])
+            _extract_cpv(add_cls)
 
     if not _is_it_relevant(cpv_ids):
         return None
@@ -109,8 +97,8 @@ def _parse_ocds_release(release: dict) -> NormalizedTender | None:
 
     # Fristen & Datum
     period = tender_block.get("tenderPeriod") or {}
-    deadline = _parse_dt(period.get("endDate"))
-    pub_date = _parse_dt(release.get("date"))
+    deadline = parse_dt(period.get("endDate"))
+    pub_date = parse_dt(release.get("date"))
 
     # Wert
     value_block = tender_block.get("value") or {}
@@ -177,6 +165,11 @@ class DoeCrawler:
         async with httpx.AsyncClient(timeout=30, headers=_HEADERS) as client:
             working_path = await self._discover_path(client, source, db)
             if working_path is None:
+                elapsed = int((time.monotonic() - start) * 1000)
+                db.add(CrawlLog(source_id=source.id if source else None, level="warn",
+                                message="DÖE: Endpoint nicht erreichbar — 0 processed, 0 new",
+                                entries_processed=0, entries_new=0, duration_ms=elapsed))
+                await db.commit()
                 return 0
 
             for page in range(1, MAX_PAGES + 1):

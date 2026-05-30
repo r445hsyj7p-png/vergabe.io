@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
-from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes
+from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
 _BASE = "https://www.berlin.de"
@@ -33,36 +33,7 @@ _RSS_CANDIDATES = [
     f"{_BEKANNTMACHUNGEN_URL}feed/rss/",
 ]
 
-_IT_CPV = ("72", "48", "73", "64", "79")
 _HEADERS = {"User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)"}
-
-_DE_MONTHS = {
-    "januar": 1, "februar": 2, "märz": 3, "april": 4, "mai": 5, "juni": 6,
-    "juli": 7, "august": 8, "september": 9, "oktober": 10, "november": 11, "dezember": 12,
-}
-
-
-def _parse_date(text: str) -> datetime | None:
-    if not text:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z", "%d.%m.%Y", "%Y-%m-%d",
-                "%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT"):
-        try:
-            dt = datetime.strptime(text.strip()[:len(fmt) + 10], fmt)
-            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
-        except ValueError:
-            continue
-    return None
-
-
-def _is_it(text: str) -> bool:
-    cpv = extract_cpv_codes(text)
-    if any(c.startswith(p) for c in cpv for p in _IT_CPV):
-        return True
-    kws = ["software", "it-", " it ", "edv", "digital", "daten", "cloud",
-           "cyber", "sicherheit", "infrastruktur", "entwicklung", "portal"]
-    low = text.lower()
-    return any(k in low for k in kws)
 
 
 def _parse_item(item) -> NormalizedTender | None:
@@ -72,11 +43,8 @@ def _parse_item(item) -> NormalizedTender | None:
         return None
 
     link_tag = item.find("link")
-    link = link_tag.get_text(strip=True) if link_tag else None
-    if not link:
-        # Atom/RSS2 link element variation
-        link_tag = item.find("link")
-        link = link_tag.get("href") if link_tag else None
+    # RSS: text content; Atom: href attribute
+    link = (link_tag.get_text(strip=True) or link_tag.get("href")) if link_tag else None
 
     desc_tag = item.find("description") or item.find("summary")
     raw_desc = desc_tag.get_text() if desc_tag else ""
@@ -88,7 +56,7 @@ def _parse_item(item) -> NormalizedTender | None:
         description = re.sub(r"<[^>]+>", " ", raw_desc).strip()[:2000]
 
     combined = f"{title} {description}"
-    if not _is_it(combined):
+    if not is_it_relevant(combined):
         return None
 
     cpv_codes = extract_cpv_codes(combined)
@@ -99,7 +67,7 @@ def _parse_item(item) -> NormalizedTender | None:
                     r"Frist[:\s]+([^\n<]+)"]:
         m = re.search(pattern, raw_desc, re.IGNORECASE)
         if m:
-            deadline = _parse_date(m.group(1).strip())
+            deadline = parse_dt(m.group(1).strip())
             if deadline:
                 break
 
@@ -112,7 +80,7 @@ def _parse_item(item) -> NormalizedTender | None:
             break
 
     pub_tag = item.find("pubDate") or item.find("published") or item.find("dc:date")
-    pub_date = _parse_date(pub_tag.get_text(strip=True) if pub_tag else None)
+    pub_date = parse_dt(pub_tag.get_text(strip=True) if pub_tag else None)
 
     guid_tag = item.find("guid") or item.find("id")
     external_id = guid_tag.get_text(strip=True) if guid_tag else None
@@ -147,6 +115,11 @@ class BerlinCrawler:
 
         feed_xml = await self._fetch_feed(client_headers=_HEADERS, source=source, db=db)
         if feed_xml is None:
+            elapsed = int((time.monotonic() - start) * 1000)
+            db.add(CrawlLog(source_id=source.id if source else None, level="warn",
+                            message="Berlin: Feed nicht erreichbar — 0 processed, 0 new",
+                            entries_processed=0, entries_new=0, duration_ms=elapsed))
+            await db.commit()
             return 0
 
         feed = BeautifulSoup(feed_xml, "xml")
@@ -164,7 +137,7 @@ class BerlinCrawler:
         if source:
             source.last_run_at = datetime.now(timezone.utc)
             source.last_run_entries = new
-            source.status = "ok" if processed >= 0 else source.status
+            source.status = "ok" if processed > 0 else source.status
         db.add(CrawlLog(
             source_id=source.id if source else None,
             level="info",

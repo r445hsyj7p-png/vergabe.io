@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
-from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes
+from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
 _HEADERS = {"User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)"}
@@ -31,28 +31,6 @@ _SEARCH_URLS = [
     f"{_BASE}/onlinesuche/ausschreibungen-online.html",  # Alle (Fallback)
 ]
 
-_IT_CPV = ("72", "48", "73", "64", "79")
-_IT_KW = ["software", "it-", " it ", "edv", "digital", "cloud", "cyber",
-           "sicherheit", "infrastruktur", "entwicklung", "netzwerk", "server"]
-
-
-def _is_it(text: str) -> bool:
-    cpv = extract_cpv_codes(text)
-    if any(c.startswith(p) for c in cpv for p in _IT_CPV):
-        return True
-    low = text.lower()
-    return any(k in low for k in _IT_KW)
-
-
-def _parse_dt(s: str | None) -> datetime | None:
-    if not s:
-        return None
-    for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(s.strip(), fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return None
 
 
 def _scrape_had(html: str) -> list[dict]:
@@ -128,7 +106,7 @@ class HadCrawler:
                     found = True
                     for item in items:
                         combined = f"{item['title']} {item.get('text', '')}"
-                        if not _is_it(combined):
+                        if not is_it_relevant(combined):
                             continue
                         key = item["title"][:100]
                         if key in seen_titles:
@@ -137,7 +115,7 @@ class HadCrawler:
 
                         cpv = extract_cpv_codes(combined)
                         deadline_m = re.search(r"(\d{2}\.\d{2}\.\d{4})", item.get("text", ""))
-                        deadline = _parse_dt(deadline_m.group(1) if deadline_m else None)
+                        deadline = parse_dt(deadline_m.group(1) if deadline_m else None)
                         auth_m = re.search(r"(?:Auftraggeber|Vergabestelle)[:\s]+([^\n]+)", item.get("text", ""))
                         authority = auth_m.group(1).strip()[:300] if auth_m else None
 
@@ -159,8 +137,7 @@ class HadCrawler:
                             new += 1
 
                     await db.commit()
-                    # Nur erste erfolgreiche URL verwenden
-                    break
+                    # Weiter mit nächster URL (alle CPV-Kategorien abdecken)
 
                 except Exception:
                     continue

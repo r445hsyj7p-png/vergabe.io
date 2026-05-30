@@ -64,9 +64,12 @@ async def trigger_crawl(
         from ..crawler.sources.doe import DoeCrawler
         from ..crawler.sources.nrw import NrwCrawler
         from ..crawler.sources.berlin import BerlinCrawler
+        from ..crawler.sources.sachsen import SachsenCrawler
+        from ..crawler.sources.had import HadCrawler
         crawlers = {
-            "ted": TedCrawler, "bund": BundRssCrawler,
-            "doe": DoeCrawler, "nrw": NrwCrawler, "berlin": BerlinCrawler,
+            "ted": TedCrawler, "bund": BundRssCrawler, "doe": DoeCrawler,
+            "nrw": NrwCrawler, "berlin": BerlinCrawler,
+            "sachsen": SachsenCrawler, "had": HadCrawler,
         }
         cls = crawlers.get(source.slug)
         if cls:

@@ -16,11 +16,13 @@ def upgrade() -> None:
     op.execute("""
         INSERT INTO sources (name, slug, source_type, is_active)
         VALUES
-            ('TED Europa',                       'ted',    'api', true),
-            ('service.bund.de',                  'bund',   'rss', true),
-            ('Datenservice Öffentlicher Einkauf', 'doe',    'api', true),
-            ('Vergabemarktplatz NRW',             'nrw',    'api', true),
-            ('Vergabeplattform Berlin',           'berlin', 'rss', true)
+            ('TED Europa',                       'ted',     'api',  true),
+            ('service.bund.de',                  'bund',    'rss',  true),
+            ('Datenservice Öffentlicher Einkauf', 'doe',    'api',  true),
+            ('Vergabemarktplatz NRW',             'nrw',    'api',  true),
+            ('Vergabeplattform Berlin',           'berlin', 'rss',  true),
+            ('eVergabe Sachsen',                  'sachsen','html', true),
+            ('HAD Hessen',                        'had',    'html', true)
         ON CONFLICT (slug) DO NOTHING
     """)
 

@@ -38,8 +38,12 @@ export function SetupPage({ onDone }: Props) {
     try {
       await completeSetup(name.trim(), email.trim().toLowerCase(), password)
       onDone()
-    } catch {
-      setError('Fehler beim Speichern. Bitte erneut versuchen.')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? (err as { message?: string })?.message
+        ?? 'Unbekannter Fehler'
+      setError(`Fehler: ${msg}`)
     } finally {
       setLoading(false)
     }

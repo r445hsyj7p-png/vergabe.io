@@ -57,7 +57,7 @@ class TedCrawler:
                 try:
                     r = await client.get(
                         f"{API_BASE}/notices/search",
-                        params={"q": "cpv:[72000000 TO 72999999]", "fields": FIELDS,
+                        params={"q": "cpvCode.code:72*", "fields": FIELDS,
                                 "page": page, "limit": PAGE_SIZE, "sortBy": "publicationDate", "sortOrder": "desc"},
                     )
                     r.raise_for_status()
@@ -65,13 +65,18 @@ class TedCrawler:
                 except Exception as e:
                     consecutive_errors += 1
                     if consecutive_errors >= 3:
+                        if source:
+                            source.status = "error"
                         break
                     await asyncio.sleep(2 ** consecutive_errors)
                     continue
 
                 consecutive_errors = 0
-                notices = data.get("notices", [])
-                if not notices:
+                notices = data.get("notices") or data.get("items") or data.get("results") or []
+                if page == 1 and not notices:
+                    total_found = data.get("total", data.get("totalNotices", "?"))
+                    if source:
+                        source.status = "warn"
                     break
 
                 for notice in notices:
@@ -89,9 +94,10 @@ class TedCrawler:
                 await asyncio.sleep(SLEEP_S)
 
         elapsed = int((time.monotonic() - start) * 1000)
+        level = "warn" if (source and source.status == "warn") else "info"
         log = CrawlLog(
             source_id=source.id if source else None,
-            level="info",
+            level=level,
             message=f"TED crawl: {processed} processed, {new} new",
             entries_processed=processed,
             entries_new=new,

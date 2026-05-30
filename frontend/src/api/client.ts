@@ -118,6 +118,18 @@ export async function fetchKomunenStats() {
   return r.data
 }
 
+export async function fetchKomunenList(params: {
+  status?: string; bundesland?: string; q?: string; page?: number; per_page?: number;
+}) {
+  const r = await api.get('/admin/komunen', { params })
+  return r.data as { items: KomunenSource[]; total: number; page: number; per_page: number }
+}
+
+export async function fetchKomunenBundeslaender() {
+  const r = await api.get('/admin/komunen/distinct-bundeslaender')
+  return r.data as string[]
+}
+
 export async function fetchKomunenQueue() {
   const r = await api.get('/admin/komunen/queue')
   return r.data as KomunenSource[]

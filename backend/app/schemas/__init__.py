@@ -186,6 +186,13 @@ class KomunenStats(BaseModel):
     with_vergabe_url: int
 
 
+class KomunenListResponse(BaseModel):
+    items: list[KomunenOut]
+    total: int
+    page: int
+    per_page: int
+
+
 # ── Summaries ─────────────────────────────────────────────────────────────
 
 class SummaryOut(BaseModel):

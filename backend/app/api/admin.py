@@ -1,15 +1,17 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends, BackgroundTasks, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.database import get_db
 from ..core.auth import require_auth
 from ..models import Tender, Source, CrawlLog, KomunenSource, TenderSummary
 from ..schemas import (
-    AdminStats, SourceOut, CrawlLogOut, KomunenOut, KomunenCreate, KomunenStats, SummaryStats
+    AdminStats, SourceOut, CrawlLogOut, KomunenOut, KomunenCreate, KomunenStats, SummaryStats,
+    KomunenListResponse,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -81,6 +83,48 @@ async def list_logs(
 
 
 # ── Kommunen ─────────────────────────────────────────────────────────────
+
+@router.get("/komunen", response_model=KomunenListResponse)
+async def list_komunen(
+    status: Optional[str] = Query(None),
+    bundesland: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_auth),
+):
+    stmt = select(KomunenSource)
+    count_stmt = select(func.count(KomunenSource.id))
+    filters = []
+    if status:
+        filters.append(KomunenSource.status == status)
+    if bundesland:
+        filters.append(KomunenSource.bundesland == bundesland)
+    if q:
+        like = f"%{q}%"
+        filters.append(or_(
+            KomunenSource.name.ilike(like),
+            KomunenSource.vergabe_url.ilike(like),
+            KomunenSource.main_url.ilike(like),
+        ))
+    if filters:
+        stmt = stmt.where(*filters)
+        count_stmt = count_stmt.where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+    rows = (await db.execute(
+        stmt.order_by(KomunenSource.name).offset((page - 1) * per_page).limit(per_page)
+    )).scalars().all()
+    return KomunenListResponse(items=list(rows), total=total, page=page, per_page=per_page)
+
+
+@router.get("/komunen/distinct-bundeslaender")
+async def distinct_bundeslaender(db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
+    rows = (await db.execute(
+        select(KomunenSource.bundesland).where(KomunenSource.bundesland.isnot(None)).distinct().order_by(KomunenSource.bundesland)
+    )).scalars().all()
+    return rows
+
 
 @router.get("/komunen/stats", response_model=KomunenStats)
 async def komunen_stats(db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):

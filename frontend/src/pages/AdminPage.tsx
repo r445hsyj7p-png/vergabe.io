@@ -5,6 +5,7 @@ import {
   fetchAdminStats, fetchSources, triggerCrawl,
   fetchCrawlLogs, fetchKomunenStats, fetchKomunenQueue, updateKomunen,
   addKomunen, triggerDestatiSync, triggerWikidataSync, triggerDiscovery,
+  fetchKomunenList, fetchKomunenBundeslaender,
 } from '../api/client'
 import { api } from '../api/client'
 import { Topbar } from '../components/Topbar'
@@ -73,15 +74,17 @@ function TableHead({ cols }: { cols: string[] }) {
   )
 }
 
-function Btn({ onClick, children, variant = 'default' }: {
+function Btn({ onClick, children, variant = 'default', disabled = false }: {
   onClick: () => void
   children: React.ReactNode
   variant?: 'default' | 'accent'
+  disabled?: boolean
 }) {
   return (
     <button
       onClick={onClick}
-      className="px-2 py-[3px] rounded text-[11px] cursor-pointer"
+      disabled={disabled}
+      className="px-2 py-[3px] rounded text-[11px] cursor-pointer disabled:opacity-40 disabled:cursor-default"
       style={{
         border: `0.5px solid ${variant === 'accent' ? 'var(--color-brand)' : 'var(--color-border)'}`,
         background: variant === 'accent' ? 'var(--color-brand-light)' : 'var(--color-surface)',
@@ -355,7 +358,177 @@ function KomunenPanel() {
           </table>
         )}
       </Section>
+
+      {/* Alle Gemeinden */}
+      <AllKomunenTable invalidateStats={() => qc.invalidateQueries({ queryKey: ['komunen-stats'] })} />
     </div>
+  )
+}
+
+function AllKomunenTable({ invalidateStats }: { invalidateStats: () => void }) {
+  const qc = useQueryClient()
+  const [statusFilter, setStatusFilter] = useState('')
+  const [bundeslandFilter, setBundeslandFilter] = useState('')
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const PER_PAGE = 50
+
+  const { data: bundeslaender = [] } = useQuery({
+    queryKey: ['komunen-bundeslaender'],
+    queryFn: fetchKomunenBundeslaender,
+  })
+
+  const { data, isFetching } = useQuery({
+    queryKey: ['komunen-list', statusFilter, bundeslandFilter, search, page],
+    queryFn: () => fetchKomunenList({
+      status: statusFilter || undefined,
+      bundesland: bundeslandFilter || undefined,
+      q: search || undefined,
+      page,
+      per_page: PER_PAGE,
+    }),
+    placeholderData: (prev) => prev,
+  })
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) => updateKomunen(id, status),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['komunen-list'] })
+      invalidateStats()
+    },
+  })
+
+  const items = data?.items ?? []
+  const total = data?.total ?? 0
+  const totalPages = Math.ceil(total / PER_PAGE)
+
+  function resetPage() { setPage(1) }
+
+  const STATUS_LABELS: Record<string, string> = {
+    auto: 'Auto',
+    verified: 'Verifiziert',
+    excluded: 'Ausgeschlossen',
+    pending_review: 'Prüfen',
+  }
+
+  return (
+    <Section
+      title="Alle Gemeinden"
+      sub={`${total} Einträge gesamt`}
+      action={
+        isFetching ? (
+          <span className="text-[11px]" style={{ color: 'var(--color-ink3)' }}>Lädt…</span>
+        ) : null
+      }
+    >
+      {/* Filters */}
+      <div className="px-4 py-3 flex gap-2 flex-wrap" style={{ borderBottom: '0.5px solid var(--color-border)' }}>
+        <input
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); resetPage() }}
+          placeholder="Suche Name / URL…"
+          className="rounded text-[12px] px-2 py-[4px] outline-none min-w-[160px]"
+          style={{ background: 'var(--color-bg)', border: '0.5px solid var(--color-border)', color: 'var(--color-ink)' }}
+        />
+        <select
+          value={statusFilter}
+          onChange={(e) => { setStatusFilter(e.target.value); resetPage() }}
+          className="rounded text-[12px] px-2 py-[4px] outline-none"
+          style={{ background: 'var(--color-bg)', border: '0.5px solid var(--color-border)', color: 'var(--color-ink)' }}
+        >
+          <option value="">Alle Status</option>
+          <option value="auto">Auto</option>
+          <option value="verified">Verifiziert</option>
+          <option value="pending_review">Prüfen</option>
+          <option value="excluded">Ausgeschlossen</option>
+        </select>
+        <select
+          value={bundeslandFilter}
+          onChange={(e) => { setBundeslandFilter(e.target.value); resetPage() }}
+          className="rounded text-[12px] px-2 py-[4px] outline-none"
+          style={{ background: 'var(--color-bg)', border: '0.5px solid var(--color-border)', color: 'var(--color-ink)' }}
+        >
+          <option value="">Alle Bundesländer</option>
+          {bundeslaender.map((bl) => <option key={bl} value={bl}>{bl}</option>)}
+        </select>
+      </div>
+
+      {/* Table */}
+      {items.length === 0 ? (
+        <div className="p-5 text-center text-[13px]" style={{ color: 'var(--color-ink3)' }}>
+          Keine Einträge gefunden.
+        </div>
+      ) : (
+        <table className="w-full border-collapse">
+          <TableHead cols={['Name', 'Bundesland', 'Ew.', 'Vergabe-URL', 'Status', '']} />
+          <tbody>
+            {items.map((k) => (
+              <tr key={k.id} style={{ borderBottom: '0.5px solid var(--color-border)' }}>
+                <td className="px-4 py-2 text-[12px] font-medium" style={{ color: 'var(--color-ink)' }}>{k.name}</td>
+                <td className="px-4 py-2 text-[11px]" style={{ color: 'var(--color-ink2)' }}>{k.bundesland ?? '—'}</td>
+                <td className="px-4 py-2 font-mono text-[11px]" style={{ color: 'var(--color-ink3)' }}>
+                  {k.einwohner ? k.einwohner.toLocaleString('de-DE') : '—'}
+                </td>
+                <td className="px-4 py-2 text-[11px] max-w-[200px] truncate">
+                  {k.vergabe_url ? (
+                    <a href={k.vergabe_url} target="_blank" rel="noopener noreferrer"
+                      className="font-mono text-[10px]" style={{ color: 'var(--color-brand)' }}>
+                      {k.vergabe_url.replace(/^https?:\/\//, '').substring(0, 35)}
+                    </a>
+                  ) : '—'}
+                </td>
+                <td className="px-4 py-2">
+                  <span
+                    className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+                    style={{
+                      background: k.status === 'verified' ? 'var(--color-emerald-light)' :
+                        k.status === 'excluded' ? 'var(--color-rose-light)' :
+                          k.status === 'pending_review' ? 'var(--color-amber-light)' : 'var(--color-border)',
+                      color: k.status === 'verified' ? 'var(--color-emerald)' :
+                        k.status === 'excluded' ? 'var(--color-rose)' :
+                          k.status === 'pending_review' ? 'var(--color-amber)' : 'var(--color-ink2)',
+                    }}
+                  >
+                    {STATUS_LABELS[k.status] ?? k.status}
+                  </span>
+                </td>
+                <td className="px-4 py-2">
+                  <div className="flex gap-1">
+                    {k.status !== 'verified' && (
+                      <Btn variant="accent" onClick={() => updateMut.mutate({ id: k.id, status: 'verified' })}>
+                        <Check size={10} />
+                      </Btn>
+                    )}
+                    {k.status !== 'excluded' && (
+                      <Btn onClick={() => updateMut.mutate({ id: k.id, status: 'excluded' })}>
+                        <X size={10} />
+                      </Btn>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="px-4 py-3 flex items-center gap-3" style={{ borderTop: '0.5px solid var(--color-border)' }}>
+          <span className="text-[11px]" style={{ color: 'var(--color-ink3)' }}>
+            Seite {page} / {totalPages} ({total} gesamt)
+          </span>
+          <div className="flex gap-1 ml-auto">
+            <Btn onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+              ← Zurück
+            </Btn>
+            <Btn onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+              Weiter →
+            </Btn>
+          </div>
+        </div>
+      )}
+    </Section>
   )
 }
 

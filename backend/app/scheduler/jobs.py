@@ -21,6 +21,14 @@ async def _job_bund():
         await run_alert_engine(db)
 
 
+async def _job_doe():
+    from ..crawler.sources.doe import DoeCrawler
+    from ..services.alert_engine import run_alert_engine
+    await DoeCrawler().run()
+    async with AsyncSessionLocal() as db:
+        await run_alert_engine(db)
+
+
 async def _job_deadline_warnings():
     from ..services.alert_engine import run_deadline_warnings
     async with AsyncSessionLocal() as db:
@@ -50,6 +58,7 @@ def start_scheduler() -> AsyncIOScheduler:
 
     scheduler.add_job(_job_ted, CronTrigger(hour="*/4", minute=5), id="ted", replace_existing=True)
     scheduler.add_job(_job_bund, CronTrigger(hour="*/2", minute=15), id="bund", replace_existing=True)
+    scheduler.add_job(_job_doe, CronTrigger(hour="*/3", minute=30), id="doe", replace_existing=True)
     scheduler.add_job(_job_deadline_warnings, CronTrigger(hour=6, minute=0), id="deadline_warnings", replace_existing=True)
     scheduler.add_job(_job_komunen_daily, CronTrigger(hour=3, minute=0), id="komunen_daily", replace_existing=True)
     scheduler.add_job(_job_wikidata, CronTrigger(day_of_week="mon", hour=4), id="wikidata", replace_existing=True)

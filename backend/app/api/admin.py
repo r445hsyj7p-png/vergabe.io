@@ -61,7 +61,8 @@ async def trigger_crawl(
     async def run():
         from ..crawler.sources.ted import TedCrawler
         from ..crawler.sources.bund_rss import BundRssCrawler
-        crawlers = {"ted": TedCrawler, "bund": BundRssCrawler}
+        from ..crawler.sources.doe import DoeCrawler
+        crawlers = {"ted": TedCrawler, "bund": BundRssCrawler, "doe": DoeCrawler}
         cls = crawlers.get(source.slug)
         if cls:
             await cls().run()

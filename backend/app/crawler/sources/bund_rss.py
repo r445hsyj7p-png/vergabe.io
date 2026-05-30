@@ -12,7 +12,7 @@ from ...models import Source, CrawlLog
 from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes
 from ..pipeline.entity_resolution import resolve
 
-RSS_URL = "https://www.service.bund.de/IMPORTE/Ausschreibungen/aaa-bund-gesamt.feed"
+RSS_URL = "https://www.service.bund.de/Content/Globals/Functions/RSSFeed/RSSGenerator_Ausschreibungen.xml"
 
 _DE_MONTHS = {
     "januar": 1, "februar": 2, "märz": 3, "april": 4, "mai": 5, "juni": 6,
@@ -54,6 +54,16 @@ class BundRssCrawler:
                 r = await client.get(RSS_URL, headers={"User-Agent": "vergabe.io/1.0"})
                 r.raise_for_status()
                 feed = BeautifulSoup(r.text, "xml")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                msg = "Bund RSS: Zugriff verweigert (403) — service.bund.de blockiert Anfragen von Server-IPs"
+            else:
+                msg = f"Bund RSS fetch failed: {e}"
+            if source:
+                source.status = "warn"
+                db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+                await db.commit()
+            return 0
         except Exception as e:
             if source:
                 source.status = "error"

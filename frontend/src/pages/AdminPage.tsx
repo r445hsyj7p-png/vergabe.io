@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { LayoutDashboard, Database, Globe, Brain, ScrollText, Play, Check, X } from 'lucide-react'
+import { LayoutDashboard, Database, Globe, Brain, ScrollText, Play, Check, X, PlayCircle, Loader2 } from 'lucide-react'
 import {
   fetchAdminStats, fetchSources, triggerCrawl,
   fetchCrawlLogs, fetchKomunenStats, fetchKomunenQueue, updateKomunen,
   addKomunen, triggerDestatiSync, triggerWikidataSync, triggerDiscovery,
   fetchKomunenList, fetchKomunenBundeslaender,
+  fetchCrawlerLive, triggerAllCrawlers,
 } from '../api/client'
+import type { CrawlerLiveEntry } from '../api/client'
 import { api } from '../api/client'
 import { Topbar } from '../components/Topbar'
 import type { TenderFilters, SearchProfile } from '../types'
@@ -145,53 +147,178 @@ function Dashboard() {
   )
 }
 
+function ElapsedTimer({ startedAt }: { startedAt: string }) {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const t0 = new Date(startedAt).getTime()
+    const iv = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 500)
+    return () => clearInterval(iv)
+  }, [startedAt])
+  const m = Math.floor(elapsed / 60)
+  const s = elapsed % 60
+  return <span className="font-mono text-[11px]" style={{ color: 'var(--color-brand)' }}>{m > 0 ? `${m}m ` : ''}{s}s</span>
+}
+
+function CrawlerRow({ entry, onStart }: { entry: CrawlerLiveEntry; onStart: () => void }) {
+  const isRunning = entry.running
+  const hasError = !!entry.run_error || entry.last_log_level === 'warn' || entry.last_log_level === 'error'
+  const logOk = entry.last_log_level === 'info'
+
+  const statusLabel = isRunning ? 'Läuft…' : entry.status === 'ok' ? 'OK' : entry.status === 'warn' ? 'Warnung' : entry.status === 'error' ? 'Fehler' : '—'
+  const statusColor = isRunning
+    ? 'var(--color-brand)'
+    : entry.status === 'ok' ? 'var(--color-emerald)'
+    : entry.status === 'warn' ? 'var(--color-amber)'
+    : entry.status === 'error' ? 'var(--color-rose)'
+    : 'var(--color-ink3)'
+
+  return (
+    <tr style={{ borderBottom: '0.5px solid var(--color-border)' }}>
+      {/* Name */}
+      <td className="px-4 py-3 text-[12px] font-medium" style={{ color: 'var(--color-ink)' }}>
+        {entry.name}
+      </td>
+
+      {/* Typ */}
+      <td className="px-4 py-3">
+        <span
+          className="px-[6px] py-[2px] rounded font-mono text-[10px]"
+          style={{
+            background: entry.source_type === 'api' ? 'var(--color-brand-light)' : 'var(--color-chip)',
+            color: entry.source_type === 'api' ? 'var(--color-brand)' : 'var(--color-ink2)',
+            border: '0.5px solid var(--color-border)',
+          }}
+        >
+          {entry.source_type.toUpperCase()}
+        </span>
+      </td>
+
+      {/* Intervall */}
+      <td className="px-4 py-3 text-[11px]" style={{ color: 'var(--color-ink3)' }}>
+        alle {entry.interval_hours}h
+      </td>
+
+      {/* Status */}
+      <td className="px-4 py-3">
+        <span
+          className="inline-flex items-center gap-1.5 font-mono text-[10px] px-[7px] py-[2px] rounded-full"
+          style={{ background: `${statusColor}20`, color: statusColor, border: `0.5px solid ${statusColor}60` }}
+        >
+          {isRunning
+            ? <Loader2 size={9} className="animate-spin" />
+            : <span className="w-[5px] h-[5px] rounded-full inline-block" style={{ background: statusColor }} />
+          }
+          {statusLabel}
+        </span>
+      </td>
+
+      {/* Progress / Letzter Lauf */}
+      <td className="px-4 py-3 text-[11px]" style={{ color: 'var(--color-ink2)' }}>
+        {isRunning && entry.started_at ? (
+          <div className="flex flex-col gap-0.5">
+            <ElapsedTimer startedAt={entry.started_at} />
+            <span style={{ color: 'var(--color-ink3)' }}>
+              {entry.run_processed ?? 0} geprüft · {entry.run_new ?? 0} neu
+            </span>
+          </div>
+        ) : entry.last_log_at ? (
+          <div className="flex flex-col gap-0.5">
+            <span>{new Date(entry.last_log_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+            <span style={{ color: hasError ? 'var(--color-amber)' : 'var(--color-ink3)' }}>
+              {entry.last_log_processed ?? 0} geprüft · {entry.last_log_new ?? 0} neu
+            </span>
+          </div>
+        ) : (
+          <span style={{ color: 'var(--color-ink3)' }}>—</span>
+        )}
+      </td>
+
+      {/* Letzte Meldung */}
+      <td className="px-4 py-3 text-[11px] max-w-[280px]" style={{ color: 'var(--color-ink3)' }}>
+        {entry.run_error ? (
+          <span className="text-[10px]" style={{ color: 'var(--color-rose)' }} title={entry.run_error}>
+            {entry.run_error.slice(0, 80)}{entry.run_error.length > 80 ? '…' : ''}
+          </span>
+        ) : entry.last_log_message ? (
+          <span className="text-[10px]" title={entry.last_log_message}>
+            {entry.last_log_message.slice(0, 80)}{entry.last_log_message.length > 80 ? '…' : ''}
+          </span>
+        ) : null}
+      </td>
+
+      {/* Starten */}
+      <td className="px-4 py-3">
+        <Btn variant="accent" disabled={isRunning} onClick={onStart}>
+          <span className="flex items-center gap-1">
+            {isRunning ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />}
+            {isRunning ? 'Läuft' : 'Starten'}
+          </span>
+        </Btn>
+      </td>
+    </tr>
+  )
+}
+
 function SourcesTable() {
   const qc = useQueryClient()
-  const { data: sources = [] } = useQuery({ queryKey: ['sources'], queryFn: fetchSources })
+  const anyRunningRef = useRef(false)
+
+  const { data: entries = [] } = useQuery({
+    queryKey: ['crawlers-live'],
+    queryFn: fetchCrawlerLive,
+    refetchInterval: (query) => {
+      const data = query.state.data as CrawlerLiveEntry[] | undefined
+      return data?.some((e) => e.running) ? 1500 : 8000
+    },
+  })
+
   const crawlMut = useMutation({
     mutationFn: (id: string) => triggerCrawl(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sources'] }),
+    onSuccess: () => setTimeout(() => qc.invalidateQueries({ queryKey: ['crawlers-live'] }), 300),
   })
+
+  const runAllMut = useMutation({
+    mutationFn: triggerAllCrawlers,
+    onSuccess: () => setTimeout(() => qc.invalidateQueries({ queryKey: ['crawlers-live'] }), 300),
+  })
+
+  const anyRunning = entries.some((e) => e.running)
+  anyRunningRef.current = anyRunning
 
   return (
     <Section
       title="API-Quellen & Scraper"
-      sub="Alle aktiven Datenquellen"
-      action={<div className="text-[11px]" style={{ color: 'var(--color-ink3)' }}>{sources.length} Quellen</div>}
+      sub="Live-Status aller Crawler"
+      action={
+        <Btn variant="accent" disabled={anyRunning} onClick={() => runAllMut.mutate()}>
+          <span className="flex items-center gap-1.5">
+            <PlayCircle size={12} />
+            Alle starten
+          </span>
+        </Btn>
+      }
     >
       <table className="w-full border-collapse">
-        <TableHead cols={['Quelle', 'Typ', 'Intervall', 'Letzter Lauf', 'Status', 'Einträge', '']} />
+        <TableHead cols={['Quelle', 'Typ', 'Intervall', 'Status', 'Lauf / Ergebnis', 'Meldung', '']} />
         <tbody>
-          {sources.map((s) => (
-            <tr key={s.id} style={{ borderBottom: '0.5px solid var(--color-border)' }}>
-              <td className="px-4 py-2.5 text-[12px] font-medium" style={{ color: 'var(--color-ink)' }}>{s.name}</td>
-              <td className="px-4 py-2.5 font-mono text-[11px]" style={{ color: 'var(--color-ink2)' }}>
-                <span
-                  className="px-[6px] py-[2px] rounded text-[10px]"
-                  style={{
-                    background: s.source_type === 'api' ? 'var(--color-brand-light)' : 'var(--color-chip)',
-                    color: s.source_type === 'api' ? 'var(--color-brand)' : 'var(--color-ink2)',
-                    border: '0.5px solid var(--color-border)',
-                  }}
-                >
-                  {s.source_type.toUpperCase()}
-                </span>
-              </td>
-              <td className="px-4 py-2.5 text-[11px]" style={{ color: 'var(--color-ink2)' }}>alle {s.interval_hours}h</td>
-              <td className="px-4 py-2.5 text-[11px]" style={{ color: 'var(--color-ink2)' }}>
-                {s.last_run_at ? new Date(s.last_run_at).toLocaleString('de-DE') : '—'}
-              </td>
-              <td className="px-4 py-2.5"><StatusDot status={s.status} /></td>
-              <td className="px-4 py-2.5 font-mono text-[11px]" style={{ color: 'var(--color-ink2)' }}>{s.last_run_entries}</td>
-              <td className="px-4 py-2.5">
-                <Btn variant="accent" onClick={() => crawlMut.mutate(s.id)}>
-                  <span className="flex items-center gap-1"><Play size={10} /> Crawlen</span>
-                </Btn>
-              </td>
-            </tr>
+          {entries.map((e) => (
+            <CrawlerRow
+              key={e.id}
+              entry={e}
+              onStart={() => crawlMut.mutate(e.id)}
+            />
           ))}
         </tbody>
       </table>
+      {anyRunning && (
+        <div
+          className="px-4 py-2 text-[11px] flex items-center gap-2"
+          style={{ borderTop: '0.5px solid var(--color-border)', color: 'var(--color-brand)' }}
+        >
+          <Loader2 size={11} className="animate-spin" />
+          Live-Update aktiv · alle 1,5s
+        </div>
+      )}
     </Section>
   )
 }

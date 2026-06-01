@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, BackgroundTasks, Query
@@ -15,6 +16,66 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+# ── Live-Crawler-State (in-memory, pro Prozess) ───────────────────────────
+
+@dataclass
+class _RunState:
+    running: bool = True
+    processed: int = 0
+    new_count: int = 0
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+_run_state: dict[str, _RunState] = {}
+
+_CRAWLERS = {
+    "ted": "..crawler.sources.ted.TedCrawler",
+    "bund": "..crawler.sources.bund_rss.BundRssCrawler",
+    "doe": "..crawler.sources.doe.DoeCrawler",
+    "nrw": "..crawler.sources.nrw.NrwCrawler",
+    "berlin": "..crawler.sources.berlin.BerlinCrawler",
+    "sachsen": "..crawler.sources.sachsen.SachsenCrawler",
+    "had": "..crawler.sources.had.HadCrawler",
+}
+
+
+async def _run_crawler(slug: str) -> None:
+    """Führt einen Crawler aus und pflegt dabei _run_state + Live-Progress."""
+    from ..crawler.pipeline.entity_resolution import _progress_cb
+
+    state = _RunState()
+    _run_state[slug] = state
+
+    def _cb(processed_delta: int, new_delta: int) -> None:
+        state.processed += processed_delta
+        state.new_count += new_delta
+
+    token = _progress_cb.set(_cb)
+    try:
+        from ..crawler.sources.ted import TedCrawler
+        from ..crawler.sources.bund_rss import BundRssCrawler
+        from ..crawler.sources.doe import DoeCrawler
+        from ..crawler.sources.nrw import NrwCrawler
+        from ..crawler.sources.berlin import BerlinCrawler
+        from ..crawler.sources.sachsen import SachsenCrawler
+        from ..crawler.sources.had import HadCrawler
+        crawlers = {
+            "ted": TedCrawler, "bund": BundRssCrawler, "doe": DoeCrawler,
+            "nrw": NrwCrawler, "berlin": BerlinCrawler,
+            "sachsen": SachsenCrawler, "had": HadCrawler,
+        }
+        cls = crawlers.get(slug)
+        if cls:
+            await cls().run()
+    except Exception as e:
+        state.error = str(e)
+    finally:
+        _progress_cb.reset(token)
+        state.running = False
+        state.finished_at = datetime.now(timezone.utc)
 
 
 @router.get("/stats", response_model=AdminStats)
@@ -46,6 +107,51 @@ async def list_sources(db: AsyncSession = Depends(get_db), _: str = Depends(requ
     return rows
 
 
+@router.get("/crawlers/live")
+async def crawlers_live(db: AsyncSession = Depends(get_db), _: str = Depends(require_auth)):
+    """Live-Status aller Crawler: running-Flag + Progress aus ContextVar + letzter CrawlLog."""
+    sources = (await db.execute(select(Source).order_by(Source.name))).scalars().all()
+
+    # Letzten CrawlLog pro Source in einem Query
+    from sqlalchemy import distinct
+    subq = (
+        select(CrawlLog.source_id, func.max(CrawlLog.created_at).label("max_at"))
+        .group_by(CrawlLog.source_id)
+        .subquery()
+    )
+    log_rows = (await db.execute(
+        select(CrawlLog).join(subq, (CrawlLog.source_id == subq.c.source_id) & (CrawlLog.created_at == subq.c.max_at))
+    )).scalars().all()
+    latest_log: dict[uuid.UUID, CrawlLog] = {lg.source_id: lg for lg in log_rows}
+
+    result = []
+    for s in sources:
+        state = _run_state.get(s.slug)
+        lg = latest_log.get(s.id)
+        result.append({
+            "id": str(s.id),
+            "slug": s.slug,
+            "name": s.name,
+            "source_type": s.source_type,
+            "interval_hours": s.interval_hours,
+            "status": s.status,
+            "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+            # Live-Run-Daten
+            "running": bool(state and state.running),
+            "started_at": state.started_at.isoformat() if (state and state.running) else None,
+            "run_processed": state.processed if state else None,
+            "run_new": state.new_count if state else None,
+            "run_error": state.error if state else None,
+            # Letzter abgeschlossener Log
+            "last_log_processed": lg.entries_processed if lg else None,
+            "last_log_new": lg.entries_new if lg else None,
+            "last_log_level": lg.level if lg else None,
+            "last_log_message": lg.message if lg else None,
+            "last_log_at": lg.created_at.isoformat() if lg else None,
+        })
+    return result
+
+
 @router.post("/sources/{source_id}/crawl")
 async def trigger_crawl(
     source_id: uuid.UUID,
@@ -57,26 +163,25 @@ async def trigger_crawl(
     if not source:
         from fastapi import HTTPException
         raise HTTPException(404, "Source not found")
-
-    async def run():
-        from ..crawler.sources.ted import TedCrawler
-        from ..crawler.sources.bund_rss import BundRssCrawler
-        from ..crawler.sources.doe import DoeCrawler
-        from ..crawler.sources.nrw import NrwCrawler
-        from ..crawler.sources.berlin import BerlinCrawler
-        from ..crawler.sources.sachsen import SachsenCrawler
-        from ..crawler.sources.had import HadCrawler
-        crawlers = {
-            "ted": TedCrawler, "bund": BundRssCrawler, "doe": DoeCrawler,
-            "nrw": NrwCrawler, "berlin": BerlinCrawler,
-            "sachsen": SachsenCrawler, "had": HadCrawler,
-        }
-        cls = crawlers.get(source.slug)
-        if cls:
-            await cls().run()
-
-    background_tasks.add_task(run)
+    if _run_state.get(source.slug) and _run_state[source.slug].running:
+        return {"message": f"{source.name} läuft bereits"}
+    background_tasks.add_task(_run_crawler, source.slug)
     return {"message": f"Crawl für {source.name} gestartet"}
+
+
+@router.post("/crawlers/run-all")
+async def run_all_crawlers(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_auth),
+):
+    sources = (await db.execute(select(Source).where(Source.is_active.is_(True)))).scalars().all()
+    started = []
+    for s in sources:
+        if not (_run_state.get(s.slug) and _run_state[s.slug].running):
+            background_tasks.add_task(_run_crawler, s.slug)
+            started.append(s.slug)
+    return {"message": f"{len(started)} Crawler gestartet", "started": started}
 
 
 @router.get("/crawl-logs", response_model=list[CrawlLogOut])

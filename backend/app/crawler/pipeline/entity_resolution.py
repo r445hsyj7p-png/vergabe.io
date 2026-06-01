@@ -1,10 +1,17 @@
 import uuid
+from contextvars import ContextVar
 from datetime import timedelta
+from typing import Callable, Optional
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import Tender, TenderSource, Source, Lot
 from .normalizer import NormalizedTender
+
+# Optionaler Live-Progress-Callback, gesetzt vom Admin-Trigger pro Task
+_progress_cb: ContextVar[Optional[Callable[[int, int], None]]] = ContextVar(
+    "_progress_cb", default=None
+)
 
 
 async def resolve(norm: NormalizedTender, db: AsyncSession) -> tuple[Tender, bool]:
@@ -18,6 +25,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> tuple[Tender, boo
         )).scalar_one_or_none()
         if existing:
             await _update_source_link(existing, source, norm, db)
+            _notify_progress(is_new=False)
             return existing, False
 
     if norm.external_id:
@@ -26,6 +34,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> tuple[Tender, boo
         )).scalar_one_or_none()
         if existing:
             await _update_source_link(existing, source, norm, db)
+            _notify_progress(is_new=False)
             return existing, False
 
     # Stage 2: fuzzy match on title + authority + deadline proximity
@@ -42,6 +51,7 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> tuple[Tender, boo
         for c in candidates:
             if _title_similarity(c.title, norm.title) > 0.8:
                 await _update_source_link(c, source, norm, db)
+                _notify_progress(is_new=False)
                 return c, False
 
     # Create new tender
@@ -95,7 +105,14 @@ async def resolve(norm: NormalizedTender, db: AsyncSession) -> tuple[Tender, boo
             cpv_codes=lot_data.get("cpv_codes"),
         ))
 
+    _notify_progress(is_new=True)
     return tender, True
+
+
+def _notify_progress(is_new: bool) -> None:
+    cb = _progress_cb.get()
+    if cb:
+        cb(1, 1 if is_new else 0)
 
 
 async def _update_source_link(tender: Tender, source, norm: NormalizedTender, db: AsyncSession):

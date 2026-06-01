@@ -108,6 +108,36 @@ export async function triggerCrawl(sourceId: string) {
   return r.data
 }
 
+export interface CrawlerLiveEntry {
+  id: string
+  slug: string
+  name: string
+  source_type: string
+  interval_hours: number
+  status: string
+  last_run_at: string | null
+  running: boolean
+  started_at: string | null
+  run_processed: number | null
+  run_new: number | null
+  run_error: string | null
+  last_log_processed: number | null
+  last_log_new: number | null
+  last_log_level: string | null
+  last_log_message: string | null
+  last_log_at: string | null
+}
+
+export async function fetchCrawlerLive() {
+  const r = await api.get('/admin/crawlers/live')
+  return r.data as CrawlerLiveEntry[]
+}
+
+export async function triggerAllCrawlers() {
+  const r = await api.post('/admin/crawlers/run-all')
+  return r.data as { message: string; started: string[] }
+}
+
 export async function fetchCrawlLogs(limit = 100) {
   const r = await api.get('/admin/crawl-logs', { params: { limit } })
   return r.data as CrawlLog[]

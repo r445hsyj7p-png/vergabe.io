@@ -1,12 +1,13 @@
 """
 Crawler für den Vergabemarktplatz NRW (vergabe.NRW)
 
-REST API: https://daten.vergabe.nrw.de/rest/evergabe (Hauptaggregator)
-Doku:     https://open.nrw/sites/default/files/opendatafiles/daten-vergabe-nrw-de-Dokumentation-v1.pdf
-Auth:     Keine (Open Data)
+Primär: CKAN Open.NRW API (ckan.open.nrw.de)
+  Dataset: ausschreibungen_des_vergabemarktplatzes_nrw_1587477165
+  → package_show gibt Ressourcen-URLs → JSON-Download
 
-Deckt Ausschreibungen aller Schwellenwerte in NRW ab (Unter- und Oberschwelle).
-Drei Subplattformen: VMP Rheinland, Vergabe Westfalen, eVergabe BLB.
+Fallback: daten.vergabe.nrw.de REST (war Hauptaggregator, DNS existiert nicht mehr)
+
+Auth: Keine (Open Data)
 """
 
 import asyncio
@@ -21,13 +22,15 @@ from ...models import Source, CrawlLog
 from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
-# Absteigend nach Erreichbarkeit — erster erfolgreicher wird genutzt
-# Alle drei Endpunkte liegen auf daten.vergabe.nrw.de — bei DNS-Ausfall scheitern
-# alle drei. Die Liste hilft nur bei Pfad-404s, nicht bei Domain-Problemen.
-_API_CANDIDATES = [
+# CKAN Open.NRW — Dataset mit allen Vergabemarktplatz-NRW-Ausschreibungen
+_CKAN_API = "https://ckan.open.nrw.de/api/3/action"
+_CKAN_DATASET_ID = "ausschreibungen_des_vergabemarktplatzes_nrw_1587477165"
+
+# Legacy REST — daten.vergabe.nrw.de existiert DNS-seitig nicht mehr (Stand 06/2026).
+# Bleibt als Fallback, falls Domain reaktiviert wird.
+_LEGACY_API_CANDIDATES = [
     "https://daten.vergabe.nrw.de/rest/evergabe",
     "https://daten.vergabe.nrw.de/rest/vergabe_westfalen",
-    "https://daten.vergabe.nrw.de/rest/vmp_rheinland_single/aggregation_search",
 ]
 
 PAGE_SIZE = 50
@@ -39,15 +42,15 @@ _HEADERS = {
     "Accept": "application/json",
 }
 
-# Mögliche Feldnamen in der API-Antwort (NRW-Datenbank nutzt deutsche Feldnamen)
-_FIELD_TITLE = ("titel", "bezeichnung", "betreff", "title", "beschreibung_kurz")
-_FIELD_AUTHORITY = ("auftraggeber", "vergabestelle", "auftraggeber_name", "contracting_authority")
-_FIELD_DEADLINE = ("angebotsfrist", "einreichungsfrist", "frist", "deadline", "submission_deadline")
-_FIELD_PUBDATE = ("veroeffentlichungsdatum", "bekanntmachungsdatum", "datum", "publication_date", "published_at")
-_FIELD_CPV = ("cpv_code", "cpv", "cpvCode", "cpv_codes", "klassifikation")
-_FIELD_VALUE = ("auftragswert", "auftragswert_von", "value", "estimated_value", "schätzwert")
-_FIELD_ID = ("id", "notice_id", "vergabe_id", "ausschreibungs_id", "noticeId")
-_FIELD_URL = ("url", "link", "detail_url", "bekanntmachungs_url")
+# Feldnamen-Mapping (CKAN-Ressourcen nutzen deutsche Spaltenbezeichnungen)
+_FIELD_TITLE = ("titel", "bezeichnung", "betreff", "title", "beschreibung_kurz", "Bekanntmachungstitel")
+_FIELD_AUTHORITY = ("auftraggeber", "vergabestelle", "auftraggeber_name", "Auftraggeber")
+_FIELD_DEADLINE = ("angebotsfrist", "einreichungsfrist", "frist", "deadline", "Angebotsfrist")
+_FIELD_PUBDATE = ("veroeffentlichungsdatum", "bekanntmachungsdatum", "datum", "Datum", "Bekanntmachungsdatum")
+_FIELD_CPV = ("cpv_code", "cpv", "cpvCode", "CPV", "cpv_codes", "klassifikation")
+_FIELD_VALUE = ("auftragswert", "auftragswert_von", "value", "Auftragswert")
+_FIELD_ID = ("id", "notice_id", "vergabe_id", "ID", "Vergabe-ID", "noticeId")
+_FIELD_URL = ("url", "link", "detail_url", "URL", "Bekanntmachungs-URL")
 
 
 def _get(d: dict, *keys) -> str | None:
@@ -65,7 +68,6 @@ def _parse_item(item: dict) -> NormalizedTender | None:
 
     raw_cpv = _get(item, *_FIELD_CPV) or ""
     cpv_codes = extract_cpv_codes(raw_cpv) if raw_cpv else []
-    # Fallback: CPV aus gesamtem Item-JSON
     if not cpv_codes:
         cpv_codes = extract_cpv_codes(str(item))
 
@@ -76,8 +78,7 @@ def _parse_item(item: dict) -> NormalizedTender | None:
     url_raw = _get(item, *_FIELD_URL)
     source_url = url_raw or (f"https://www.vergabe.nrw.de/ausschreibung/{notice_id}" if notice_id else None)
 
-    desc = _get(item, "beschreibung", "leistungsbeschreibung", "description", "text")
-
+    desc = _get(item, "beschreibung", "leistungsbeschreibung", "description", "Beschreibung", "text")
     authority = _get(item, *_FIELD_AUTHORITY)
     deadline = parse_dt(_get(item, *_FIELD_DEADLINE))
     pub_date = parse_dt(_get(item, *_FIELD_PUBDATE))
@@ -90,7 +91,7 @@ def _parse_item(item: dict) -> NormalizedTender | None:
         except (ValueError, TypeError):
             pass
 
-    region = _get(item, "ort", "stadt", "region", "bundesland") or "Nordrhein-Westfalen"
+    region = _get(item, "ort", "stadt", "region", "bundesland", "Ort") or "Nordrhein-Westfalen"
 
     return NormalizedTender(
         title=title[:500],
@@ -122,122 +123,131 @@ class NrwCrawler:
         start = time.monotonic()
         processed = new = 0
 
-        # Letzte 3 Tage — NRW aktualisiert täglich
-        date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+        async with httpx.AsyncClient(timeout=30, headers=_HEADERS, follow_redirects=True) as client:
+            items = await self._fetch_items(client, source, db)
 
-        # Arbeitenden Endpunkt ermitteln
-        api_base = await self._discover_endpoint()
-        if api_base is None:
+        if items is None:
+            # Fehler wurde bereits geloggt
             elapsed = int((time.monotonic() - start) * 1000)
-            msg = (
-                f"NRW: Alle Endpunkte nicht erreichbar — DNS-Fehler oder IP-Sperre. "
-                f"Geprüft: {', '.join(_API_CANDIDATES)}"
-            )
             if source:
                 source.status = "warn"
                 source.last_run_at = datetime.now(timezone.utc)
             db.add(CrawlLog(source_id=source.id if source else None, level="warn",
-                            message=msg, entries_processed=0, entries_new=0, duration_ms=elapsed))
+                            message="NRW: Keine Daten abgerufen — CKAN und Legacy-API nicht erreichbar",
+                            entries_processed=0, entries_new=0, duration_ms=elapsed))
             await db.commit()
             return 0
 
-        async with httpx.AsyncClient(timeout=30, headers=_HEADERS) as client:
-            for page in range(0, MAX_PAGES):  # Spring Data beginnt bei page=0
-                try:
-                    r = await client.get(
-                        api_base,
-                        params={
-                            "page": page,
-                            "size": PAGE_SIZE,
-                            "sort": "veroeffentlichungsdatum,desc",
-                            "filter[veroeffentlichungsdatum][$gte]": date_from,
-                        },
-                    )
-                    if r.status_code == 403:
-                        msg = f"NRW API: Zugriff verweigert (403) — Server-IP blockiert ({api_base})"
-                        if source:
-                            source.status = "warn"
-                            db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
-                            await db.commit()
-                        break
-                    r.raise_for_status()
-                    data = r.json()
-                except httpx.HTTPStatusError as e:
-                    if source:
-                        db.add(CrawlLog(source_id=source.id, level="warn",
-                                        message=f"NRW API HTTP {e.response.status_code} auf Seite {page}"))
-                        await db.commit()
-                    break
-                except Exception as e:
-                    if source:
-                        db.add(CrawlLog(source_id=source.id, level="error",
-                                        message=f"NRW API Fehler: {e}"))
-                        await db.commit()
-                    break
-
-                # Spring Data REST Paginierung: _embedded.* oder content oder items
-                items: list = []
-                if "_embedded" in data:
-                    for v in data["_embedded"].values():
-                        if isinstance(v, list):
-                            items = v
-                            break
-                elif "content" in data:
-                    items = data["content"]
-                elif isinstance(data, list):
-                    items = data
-                else:
-                    items = data.get("items") or data.get("results") or data.get("data") or []
-
-                if not items:
-                    break
-
-                for item in items:
-                    norm = _parse_item(item)
-                    if not norm:
-                        continue
-                    _, is_new = await resolve(norm, db)
-                    processed += 1
-                    if is_new:
-                        new += 1
-
-                await db.commit()
-
-                # Pagination: Spring Data Page-Objekt
-                page_meta = data.get("page") or {}
-                total_pages = page_meta.get("totalPages") or data.get("totalPages")
-                if total_pages and page >= int(total_pages) - 1:
-                    break
-                if len(items) < PAGE_SIZE:
-                    break
-
-                await asyncio.sleep(SLEEP_S)
+        async with AsyncSessionLocal() as db2:
+            for item in items:
+                norm = _parse_item(item)
+                if not norm:
+                    continue
+                _, is_new = await resolve(norm, db2)
+                processed += 1
+                if is_new:
+                    new += 1
+            await db2.commit()
 
         elapsed = int((time.monotonic() - start) * 1000)
-        if source:
-            source.last_run_at = datetime.now(timezone.utc)
-            source.last_run_entries = new
-            source.status = "ok" if processed > 0 else source.status
-        db.add(CrawlLog(
-            source_id=source.id if source else None,
-            level="info",
-            message=f"NRW: {processed} processed, {new} new",
-            entries_processed=processed,
-            entries_new=new,
-            duration_ms=elapsed,
-        ))
-        await db.commit()
+        async with AsyncSessionLocal() as db3:
+            src = (await db3.execute(select(Source).where(Source.slug == self.slug))).scalar_one_or_none()
+            if src:
+                src.last_run_at = datetime.now(timezone.utc)
+                src.last_run_entries = new
+                src.status = "ok" if processed > 0 else src.status
+            db3.add(CrawlLog(
+                source_id=src.id if src else None,
+                level="info",
+                message=f"NRW: {processed} processed, {new} new",
+                entries_processed=processed,
+                entries_new=new,
+                duration_ms=elapsed,
+            ))
+            await db3.commit()
         return new
 
-    async def _discover_endpoint(self) -> str | None:
-        """Probiert API-Endpunkte durch und gibt den ersten erreichbaren zurück."""
-        async with httpx.AsyncClient(timeout=10, headers=_HEADERS) as client:
-            for base in _API_CANDIDATES:
+    async def _fetch_items(self, client: httpx.AsyncClient, source, db: AsyncSession) -> list[dict] | None:
+        """Versucht CKAN zuerst, dann Legacy-REST."""
+        # 1. CKAN Open.NRW
+        items = await self._fetch_via_ckan(client)
+        if items is not None:
+            return items
+
+        # 2. Legacy REST (daten.vergabe.nrw.de — möglicherweise reaktiviert)
+        date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+        for base in _LEGACY_API_CANDIDATES:
+            try:
+                r = await client.get(base, params={"page": 0, "size": PAGE_SIZE,
+                                                    "sort": "veroeffentlichungsdatum,desc",
+                                                    "filter[veroeffentlichungsdatum][$gte]": date_from})
+                if r.status_code == 200:
+                    data = r.json()
+                    legacy_items: list = []
+                    if "_embedded" in data:
+                        for v in data["_embedded"].values():
+                            if isinstance(v, list):
+                                legacy_items = v
+                                break
+                    elif "content" in data:
+                        legacy_items = data["content"]
+                    elif isinstance(data, list):
+                        legacy_items = data
+                    if legacy_items:
+                        return legacy_items
+            except Exception:
+                continue
+
+        return None
+
+    async def _fetch_via_ckan(self, client: httpx.AsyncClient) -> list[dict] | None:
+        """Lädt aktuelle Ausschreibungen über die CKAN Open.NRW API."""
+        try:
+            # Ressourcen-URLs aus Dataset-Metadaten holen
+            r = await client.get(f"{_CKAN_API}/package_show",
+                                  params={"id": _CKAN_DATASET_ID})
+            if r.status_code != 200:
+                return None
+
+            resources = r.json().get("result", {}).get("resources", [])
+            if not resources:
+                return None
+
+            # JSON-Ressourcen bevorzugen; CSV als Fallback
+            json_resources = [res for res in resources if res.get("format", "").upper() == "JSON"]
+            csv_resources = [res for res in resources if res.get("format", "").upper() == "CSV"]
+            candidates = json_resources or csv_resources
+            if not candidates:
+                candidates = resources  # beliebiges Format versuchen
+
+            for res in candidates[:3]:
+                url = res.get("url")
+                if not url:
+                    continue
                 try:
-                    r = await client.get(base, params={"page": 0, "size": 1})
-                    # 400/403 bedeuten DNS funktioniert — Hauptloop übernimmt Fehlerbehandlung
-                    if r.status_code in (200, 206, 400, 403):
-                        return base
+                    r2 = await client.get(url, timeout=60)
+                    if r2.status_code != 200:
+                        continue
+                    ct = r2.headers.get("content-type", "")
+                    if "json" in ct or url.endswith(".json"):
+                        data = r2.json()
+                        if isinstance(data, list):
+                            return data
+                        for key in ("result", "records", "data", "items", "results"):
+                            if isinstance(data.get(key), list):
+                                return data[key]
+                    elif "csv" in ct or url.endswith(".csv"):
+                        return self._parse_csv(r2.text)
                 except Exception:
                     continue
+
+        except Exception:
+            pass
         return None
+
+    @staticmethod
+    def _parse_csv(text: str) -> list[dict]:
+        """Parst CSV-Text in eine Liste von Dicts."""
+        import csv, io
+        reader = csv.DictReader(io.StringIO(text))
+        return list(reader)

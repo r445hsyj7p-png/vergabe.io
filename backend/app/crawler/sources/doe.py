@@ -26,12 +26,18 @@ from ..pipeline.entity_resolution import resolve
 API_BASE = "https://oeffentlichevergabe.de"
 
 # Mögliche Endpoint-Pfade (absteigend nach Wahrscheinlichkeit)
+# Swagger-UI: https://oeffentlichevergabe.de/documentation/swagger-ui/opendata/index.html
+# Operation "getExportAsEforms" → Pfad enthält wahrscheinlich "eforms" oder "export"
 _CANDIDATE_PATHS = [
     "/api/opendata/notices",
-    "/opendata/notices",
-    "/api/notices",
-    "/opendata/v1/notices",
     "/api/opendata/v1/notices",
+    "/opendata/notices",
+    "/opendata/v1/notices",
+    "/api/v1/opendata/notices",
+    "/api/notices",
+    "/opendata/api/notices",
+    "/api/opendata/eforms",
+    "/opendata/eforms",
 ]
 
 PAGE_SIZE = 50
@@ -244,6 +250,7 @@ class DoeCrawler:
 
     async def _discover_path(self, client: httpx.AsyncClient, source, db: AsyncSession) -> str | None:
         """Findet den korrekten API-Endpoint-Pfad durch sequentielles Ausprobieren."""
+        ip_blocked = False
         for path in _CANDIDATE_PATHS:
             try:
                 r = await client.get(
@@ -253,23 +260,25 @@ class DoeCrawler:
                 if r.status_code in (200, 206):
                     return path
                 if r.status_code == 403:
-                    msg = (
-                        "DÖE: Zugriff verweigert (403) — Server-IP blockiert. "
-                        "Gleicher Mechanismus wie service.bund.de. "
-                        f"Endpoint war: {API_BASE}{path}"
-                    )
-                    if source:
-                        source.status = "warn"
-                        db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
-                        await db.commit()
-                    return None
+                    # IP-Block gilt für alle Pfade auf diesem Server
+                    ip_blocked = True
+                    break
+                # 404/405/etc. → falscher Pfad, weiter probieren
             except Exception:
                 continue
 
-        msg = (
-            f"DÖE: Kein Endpoint erreichbar. Geprüft: {', '.join(_CANDIDATE_PATHS)}. "
-            "Bitte Swagger-UI öffnen: https://oeffentlichevergabe.de/documentation/swagger-ui/opendata/index.html"
-        )
+        if ip_blocked:
+            msg = (
+                "DÖE: Zugriff verweigert (403) — Server-IP blockiert. "
+                "Gleicher Mechanismus wie service.bund.de. "
+                "Swagger-UI: https://oeffentlichevergabe.de/documentation/swagger-ui/opendata/index.html"
+            )
+        else:
+            msg = (
+                f"DÖE: Kein Endpoint erreichbar ({len(_CANDIDATE_PATHS)} Pfade getestet). "
+                "Bitte Swagger-UI im Browser öffnen: "
+                "https://oeffentlichevergabe.de/documentation/swagger-ui/opendata/index.html"
+            )
         if source:
             source.status = "warn"
             db.add(CrawlLog(source_id=source.id, level="warn", message=msg))

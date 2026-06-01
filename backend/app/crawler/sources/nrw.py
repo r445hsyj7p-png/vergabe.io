@@ -1,11 +1,12 @@
 """
 Crawler für den Vergabemarktplatz NRW (vergabe.NRW)
 
-REST API: https://daten.vergabe.nrw.de/rest/evergabe
+REST API: https://daten.vergabe.nrw.de/rest/evergabe (Hauptaggregator)
 Doku:     https://open.nrw/sites/default/files/opendatafiles/daten-vergabe-nrw-de-Dokumentation-v1.pdf
 Auth:     Keine (Open Data)
 
 Deckt Ausschreibungen aller Schwellenwerte in NRW ab (Unter- und Oberschwelle).
+Drei Subplattformen: VMP Rheinland, Vergabe Westfalen, eVergabe BLB.
 """
 
 import asyncio
@@ -20,7 +21,13 @@ from ...models import Source, CrawlLog
 from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
-API_BASE = "https://daten.vergabe.nrw.de/rest/evergabe"
+# Absteigend nach Erreichbarkeit — erster erfolgreicher wird genutzt
+_API_CANDIDATES = [
+    "https://daten.vergabe.nrw.de/rest/evergabe",
+    "https://daten.vergabe.nrw.de/rest/vergabe_westfalen",
+    "https://daten.vergabe.nrw.de/rest/vmp_rheinland_single/aggregation_search",
+]
+
 PAGE_SIZE = 50
 MAX_PAGES = 40
 SLEEP_S = 1.0
@@ -30,7 +37,6 @@ _HEADERS = {
     "Accept": "application/json",
 }
 
-# IT-relevante CPV-Präfixe
 # Mögliche Feldnamen in der API-Antwort (NRW-Datenbank nutzt deutsche Feldnamen)
 _FIELD_TITLE = ("titel", "bezeichnung", "betreff", "title", "beschreibung_kurz")
 _FIELD_AUTHORITY = ("auftraggeber", "vergabestelle", "auftraggeber_name", "contracting_authority")
@@ -61,7 +67,7 @@ def _parse_item(item: dict) -> NormalizedTender | None:
     if not cpv_codes:
         cpv_codes = extract_cpv_codes(str(item))
 
-    if not is_it_relevant(cpv_codes):
+    if not is_it_relevant(title, cpv_codes=cpv_codes):
         return None
 
     notice_id = _get(item, *_FIELD_ID)
@@ -117,11 +123,26 @@ class NrwCrawler:
         # Letzte 3 Tage — NRW aktualisiert täglich
         date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
 
+        # Arbeitenden Endpunkt ermitteln
+        api_base = await self._discover_endpoint()
+        if api_base is None:
+            elapsed = int((time.monotonic() - start) * 1000)
+            msg = (
+                f"NRW: Alle Endpunkte nicht erreichbar — DNS-Fehler oder IP-Sperre. "
+                f"Geprüft: {', '.join(_API_CANDIDATES)}"
+            )
+            if source:
+                source.status = "warn"
+            db.add(CrawlLog(source_id=source.id if source else None, level="warn",
+                            message=msg, entries_processed=0, entries_new=0, duration_ms=elapsed))
+            await db.commit()
+            return 0
+
         async with httpx.AsyncClient(timeout=30, headers=_HEADERS) as client:
             for page in range(0, MAX_PAGES):  # Spring Data beginnt bei page=0
                 try:
                     r = await client.get(
-                        API_BASE,
+                        api_base,
                         params={
                             "page": page,
                             "size": PAGE_SIZE,
@@ -130,7 +151,7 @@ class NrwCrawler:
                         },
                     )
                     if r.status_code == 403:
-                        msg = "NRW API: Zugriff verweigert (403) — Server-IP blockiert"
+                        msg = f"NRW API: Zugriff verweigert (403) — Server-IP blockiert ({api_base})"
                         if source:
                             source.status = "warn"
                             db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
@@ -204,3 +225,16 @@ class NrwCrawler:
         ))
         await db.commit()
         return new
+
+    async def _discover_endpoint(self) -> str | None:
+        """Probiert API-Endpunkte durch und gibt den ersten erreichbaren zurück."""
+        async with httpx.AsyncClient(timeout=10, headers=_HEADERS) as client:
+            for base in _API_CANDIDATES:
+                try:
+                    r = await client.get(base, params={"page": 0, "size": 1})
+                    # 400/403 bedeuten DNS funktioniert — Hauptloop übernimmt Fehlerbehandlung
+                    if r.status_code in (200, 206, 400, 403):
+                        return base
+                except Exception:
+                    continue
+        return None

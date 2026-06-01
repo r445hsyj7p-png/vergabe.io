@@ -94,6 +94,8 @@ class TedCrawler:
                             "page": page,
                             "limit": PAGE_SIZE,
                             "scope": "ACTIVE",
+                            "sortField": "publication-date",
+                            "sortOrder": "DESC",
                             "checkQuerySyntax": False,
                         },
                         headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -183,7 +185,7 @@ class TedCrawler:
         if isinstance(value_data, (int, float)):
             value_max = int(float(value_data) * 100)
         elif isinstance(value_data, dict):
-            value_max = int(float(value_data.get("amount", 0)) * 100) if value_data.get("amount") else None
+            value_max = int(float(value_data["amount"]) * 100) if value_data.get("amount") is not None else None
         else:
             value_max = None
 

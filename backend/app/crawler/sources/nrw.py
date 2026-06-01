@@ -22,6 +22,8 @@ from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt,
 from ..pipeline.entity_resolution import resolve
 
 # Absteigend nach Erreichbarkeit — erster erfolgreicher wird genutzt
+# Alle drei Endpunkte liegen auf daten.vergabe.nrw.de — bei DNS-Ausfall scheitern
+# alle drei. Die Liste hilft nur bei Pfad-404s, nicht bei Domain-Problemen.
 _API_CANDIDATES = [
     "https://daten.vergabe.nrw.de/rest/evergabe",
     "https://daten.vergabe.nrw.de/rest/vergabe_westfalen",
@@ -133,6 +135,7 @@ class NrwCrawler:
             )
             if source:
                 source.status = "warn"
+                source.last_run_at = datetime.now(timezone.utc)
             db.add(CrawlLog(source_id=source.id if source else None, level="warn",
                             message=msg, entries_processed=0, entries_new=0, duration_ms=elapsed))
             await db.commit()

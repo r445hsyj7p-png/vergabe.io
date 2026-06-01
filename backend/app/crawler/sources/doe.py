@@ -171,11 +171,6 @@ class DoeCrawler:
         async with httpx.AsyncClient(timeout=30, headers=_HEADERS) as client:
             working_path = await self._discover_path(client, source, db)
             if working_path is None:
-                elapsed = int((time.monotonic() - start) * 1000)
-                db.add(CrawlLog(source_id=source.id if source else None, level="warn",
-                                message="DÖE: Endpoint nicht erreichbar — 0 processed, 0 new",
-                                entries_processed=0, entries_new=0, duration_ms=elapsed))
-                await db.commit()
                 return 0
 
             for page in range(1, MAX_PAGES + 1):

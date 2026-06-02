@@ -35,14 +35,6 @@ _SEARCH_QUERY = (
     " OR classification-cpv:[73000000 TO 73999999]"
 )
 
-# Felder die zurückgegeben werden sollen (TED v3 kebab-case Format)
-_FIELDS = [
-    "publication-number", "title", "description",
-    "buyer", "cpv", "estimated-value",
-    "submission-deadline-date", "publication-date",
-    "procedure-type", "lots"
-]
-
 # Fallback-Feldnamen für verschiedene TED-API-Versionen (v2 vs v3)
 _FIELD_ID = ("publication-number", "noticeId", "notice-id", "id")
 _FIELD_TITLE = ("title",)
@@ -95,12 +87,8 @@ class TedCrawler:
                         f"{API_BASE}/notices/search",
                         json={
                             "query": _SEARCH_QUERY,
-                            "fields": _FIELDS,
                             "page": page,
                             "limit": PAGE_SIZE,
-                            "sortField": "publication-date",
-                            "sortOrder": "DESC",
-                            "checkQuerySyntax": False,
                         },
                         headers={"Content-Type": "application/json", "Accept": "application/json"},
                     )
@@ -126,14 +114,24 @@ class TedCrawler:
                         await db.commit()
                     break
 
+                page_parsed = 0
                 for notice in notices:
                     norm = self._parse(notice)
                     if not norm:
                         continue
                     _, is_new = await resolve(norm, db)
                     processed += 1
+                    page_parsed += 1
                     if is_new:
                         new += 1
+
+                if notices and page_parsed == 0 and page == 1:
+                    if source:
+                        source.status = "warn"
+                        db.add(CrawlLog(source_id=source.id, level="warn",
+                                        message=f"TED: {len(notices)} Notices abgerufen, aber keines geparst — Antwortstruktur prüfen: {list(notices[0].keys())[:10]}"))
+                        await db.commit()
+                    break
 
                 await db.commit()
                 if len(notices) < PAGE_SIZE:

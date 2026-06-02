@@ -35,14 +35,15 @@ _SEARCH_QUERY = (
     " OR classification-cpv:[73000000 TO 73999999]"
 )
 
-# Fallback-Feldnamen für verschiedene TED-API-Versionen (v2 vs v3)
-_FIELD_ID = ("publication-number", "noticeId", "notice-id", "id")
-_FIELD_TITLE = ("title",)
-_FIELD_DESC = ("description",)
-_FIELD_BUYER = ("buyer",)
-_FIELD_CPV = ("cpv", "cpvCodes", "cpv-codes")
-_FIELD_VALUE = ("estimated-value", "estimatedTotalValue", "estimated-total-value")
-_FIELD_DEADLINE = ("submission-deadline-date", "submissionDeadlineDate")
+# Fallback-Feldnamen für verschiedene TED-API-Versionen.
+# TED v3 eForms-API (api.ted.europa.eu/v3) nutzt andere Namen als die ältere REST-API.
+_FIELD_ID = ("publication-number", "notice-identifier", "noticeId", "notice-id", "id")
+_FIELD_TITLE = ("notice-title", "title-official-language", "title",)
+_FIELD_DESC = ("description", "notice-description",)
+_FIELD_BUYER = ("buyer-name", "organisation-name-buyer", "buyer",)
+_FIELD_CPV = ("classification-cpv", "cpv", "cpvCodes", "cpv-codes")
+_FIELD_VALUE = ("tender-value", "estimated-value", "estimated-total-value", "estimatedTotalValue")
+_FIELD_DEADLINE = ("deadline-receipt-tenders", "submission-deadline-date", "deadline", "submissionDeadlineDate")
 _FIELD_PUBDATE = ("publication-date", "publicationDate")
 _FIELD_PROC = ("procedure-type", "procedureType")
 _FIELD_LOTS = ("lots",)
@@ -95,6 +96,7 @@ class TedCrawler:
                             "query": _SEARCH_QUERY,
                             "page": page,
                             "limit": PAGE_SIZE,
+                            "scope": "ALL",
                         },
                         headers={"Content-Type": "application/json", "Accept": "application/json"},
                     )
@@ -151,14 +153,17 @@ class TedCrawler:
 
                 # Wenn alle Notices auf Seite 1 nicht parsbar: Strukturfehler loggen
                 if notices and page_parsed == 0 and page == 1:
-                    sample_keys = list(notices[0].keys())[:15] if notices else []
+                    sample = notices[0] if notices else {}
+                    sample_keys = list(sample.keys())[:20]
+                    # Zeige Wert der ersten 5 Felder für Diagnose
+                    sample_values = {k: str(sample[k])[:80] for k in sample_keys[:5]}
                     if source:
                         source.status = "warn"
                         db.add(CrawlLog(
                             source_id=source.id, level="warn",
                             message=f"TED: {len(notices)} Notices erhalten, keines parsbar — Antwortstruktur prüfen",
                             details={"requests": requests_log, "sample_keys": sample_keys,
-                                     "sample_title_field": notices[0].get("title") if notices else None},
+                                     "sample_values": sample_values},
                         ))
                         await db.commit()
                     break
@@ -198,33 +203,57 @@ class TedCrawler:
         if not title:
             return None
 
-        buyer = _get(notice, *_FIELD_BUYER) or {}
-        if isinstance(buyer, list):
-            buyer = buyer[0] if buyer else {}
-        authority = _prefer_lang(buyer.get("officialName")) or _prefer_lang(buyer.get("name"))
-        address_parts = [
-            buyer.get("addressLine1", ""), buyer.get("postalCode", ""), buyer.get("city", "")
-        ]
-        address = ", ".join(p for p in address_parts if p) or None
+        # buyer-name: String, Liste von Strings oder altes Buyer-Objekt
+        buyer_raw = _get(notice, *_FIELD_BUYER)
+        authority: str | None = None
+        address: str | None = None
+        if isinstance(buyer_raw, str):
+            authority = buyer_raw
+        elif isinstance(buyer_raw, list):
+            # Kann Liste von Strings oder Objekten sein
+            first = buyer_raw[0] if buyer_raw else None
+            if isinstance(first, str):
+                authority = first
+            elif isinstance(first, dict):
+                authority = _prefer_lang(first.get("officialName")) or _prefer_lang(first.get("name"))
+                address_parts = [first.get("addressLine1", ""), first.get("postalCode", ""), first.get("city", "")]
+                address = ", ".join(p for p in address_parts if p) or None
+        elif isinstance(buyer_raw, dict):
+            authority = _prefer_lang(buyer_raw.get("officialName")) or _prefer_lang(buyer_raw.get("name"))
+            address_parts = [buyer_raw.get("addressLine1", ""), buyer_raw.get("postalCode", ""), buyer_raw.get("city", "")]
+            address = ", ".join(p for p in address_parts if p) or None
 
-        # CPV-Codes: verschiedene Formate (Objekt-Array oder String-Array)
+        # CPV-Codes: String-Array ("72100000"), Objekt-Array ({code: "..."}) oder einzelner String
         cpv_raw = _get(notice, *_FIELD_CPV) or []
         cpvs: list[str] = []
-        for c in cpv_raw:
-            if isinstance(c, dict):
-                code = c.get("code") or c.get("id") or c.get("value")
-                if code:
-                    cpvs.append(str(code))
-            elif isinstance(c, str):
-                cpvs.append(c)
+        if isinstance(cpv_raw, str):
+            cpvs = [cpv_raw]
+        else:
+            for c in cpv_raw:
+                if isinstance(c, dict):
+                    code = c.get("code") or c.get("id") or c.get("value")
+                    if code:
+                        cpvs.append(str(code))
+                elif isinstance(c, str):
+                    cpvs.append(c)
 
-        value_data = _get(notice, *_FIELD_VALUE) or {}
+        # Wert: {amount: X, currency: Y}, Zahl, oder Liste davon
+        value_data = _get(notice, *_FIELD_VALUE)
+        value_max: int | None = None
         if isinstance(value_data, (int, float)):
             value_max = int(float(value_data) * 100)
         elif isinstance(value_data, dict):
-            value_max = int(float(value_data["amount"]) * 100) if value_data.get("amount") is not None else None
-        else:
-            value_max = None
+            amt = value_data.get("amount") or value_data.get("value")
+            if amt is not None:
+                value_max = int(float(amt) * 100)
+        elif isinstance(value_data, list) and value_data:
+            first_val = value_data[0]
+            if isinstance(first_val, (int, float)):
+                value_max = int(float(first_val) * 100)
+            elif isinstance(first_val, dict):
+                amt = first_val.get("amount") or first_val.get("value")
+                if amt is not None:
+                    value_max = int(float(amt) * 100)
 
         lots_raw = _get(notice, *_FIELD_LOTS) or []
         lots = []

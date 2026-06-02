@@ -82,32 +82,34 @@ class BundRssCrawler:
         if source:
             source.last_run_at = datetime.now(timezone.utc)
             source.last_run_entries = new
-            source.status = "ok"
+            source.status = "ok" if processed > 0 else source.status
         await db.commit()
         return new
 
     async def _fetch_feed(self, source, db):
         """Versucht RSS-Kandidaten der Reihe nach, gibt BeautifulSoup zurück oder None."""
         headers = {"User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)"}
+        last_error: str = "Kein Feed erreichbar"
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             for url in _RSS_CANDIDATES:
                 try:
                     r = await client.get(url, headers=headers)
                     if r.status_code == 403:
-                        msg = "Bund RSS: Zugriff verweigert (403) — service.bund.de blockiert Server-IPs"
-                        if source:
-                            source.status = "warn"
-                            db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
-                            await db.commit()
-                        return None
+                        # IP-Block auf dieser URL — nächsten Kandidaten versuchen
+                        last_error = f"Zugriff verweigert (403) auf {url} — nächste URL wird versucht"
+                        continue
                     if r.status_code == 200 and ("<item" in r.text or "<rss" in r.text):
                         return BeautifulSoup(r.text, "xml")
-                except Exception:
+                    last_error = f"HTTP {r.status_code} von {url}"
+                except Exception as exc:
+                    last_error = f"{type(exc).__name__} bei {url}: {exc}"
                     continue
+        # Alle Kandidaten erschöpft
         if source:
             source.status = "warn"
+            source.last_run_at = datetime.now(timezone.utc)
             db.add(CrawlLog(source_id=source.id, level="warn",
-                            message="Bund RSS: Kein Feed erreichbar"))
+                            message=f"Bund RSS: {last_error}"))
             await db.commit()
         return None
 
@@ -132,8 +134,7 @@ class BundRssCrawler:
             description = re.sub(r"<[^>]+>", " ", raw_desc).strip()[:2000]
 
         cpv_codes = extract_cpv_codes(raw_desc)
-        combined = f"{title} {description}"
-        if not is_it_relevant(combined, cpv_codes=cpv_codes):
+        if not is_it_relevant(title, description=description, cpv_codes=cpv_codes):
             return None
 
         authority = None

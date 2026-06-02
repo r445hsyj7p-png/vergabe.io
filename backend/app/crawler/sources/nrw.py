@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...core.database import AsyncSessionLocal
+from ...core.database import AsyncSessionLocal  # für run()
 from ...models import Source, CrawlLog
 from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, parse_dt, is_it_relevant
 from ..pipeline.entity_resolution import resolve
@@ -127,7 +127,6 @@ class NrwCrawler:
             items = await self._fetch_items(client, source, db)
 
         if items is None:
-            # Fehler wurde bereits geloggt
             elapsed = int((time.monotonic() - start) * 1000)
             if source:
                 source.status = "warn"
@@ -138,33 +137,29 @@ class NrwCrawler:
             await db.commit()
             return 0
 
-        async with AsyncSessionLocal() as db2:
-            for item in items:
-                norm = _parse_item(item)
-                if not norm:
-                    continue
-                _, is_new = await resolve(norm, db2)
-                processed += 1
-                if is_new:
-                    new += 1
-            await db2.commit()
+        for item in items:
+            norm = _parse_item(item)
+            if not norm:
+                continue
+            _, is_new = await resolve(norm, db)
+            processed += 1
+            if is_new:
+                new += 1
 
         elapsed = int((time.monotonic() - start) * 1000)
-        async with AsyncSessionLocal() as db3:
-            src = (await db3.execute(select(Source).where(Source.slug == self.slug))).scalar_one_or_none()
-            if src:
-                src.last_run_at = datetime.now(timezone.utc)
-                src.last_run_entries = new
-                src.status = "ok" if processed > 0 else src.status
-            db3.add(CrawlLog(
-                source_id=src.id if src else None,
-                level="info",
-                message=f"NRW: {processed} processed, {new} new",
-                entries_processed=processed,
-                entries_new=new,
-                duration_ms=elapsed,
-            ))
-            await db3.commit()
+        if source:
+            source.last_run_at = datetime.now(timezone.utc)
+            source.last_run_entries = new
+            source.status = "ok" if processed > 0 else source.status
+        db.add(CrawlLog(
+            source_id=source.id if source else None,
+            level="info",
+            message=f"NRW: {processed} processed, {new} new",
+            entries_processed=processed,
+            entries_new=new,
+            duration_ms=elapsed,
+        ))
+        await db.commit()
         return new
 
     async def _fetch_items(self, client: httpx.AsyncClient, source, db: AsyncSession) -> list[dict] | None:

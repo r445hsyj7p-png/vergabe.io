@@ -32,7 +32,7 @@ from ..pipeline.entity_resolution import resolve
 
 API_BASE = "https://www.oeffentlichevergabe.de"
 ENDPOINT = "/api/notice-exports"
-DAYS_BACK = 2  # Letzten N Tage abrufen (überlappend für Robustheit)
+DAYS_BACK = 2  # Letzten N Tage abrufen (heute + gestern für Überlappung)
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; vergabe.io/1.0; +https://vergabe.io)",
@@ -210,7 +210,10 @@ class DoeCrawler:
         elapsed = int((time.monotonic() - start) * 1000)
         if source:
             source.last_run_at = datetime.now(timezone.utc)
-            source.last_run_entries = new
+            # last_run_entries nur bei echten Ergebnissen überschreiben,
+            # nicht bei IP-Block (würde letzten erfolgreichen Zähler auf 0 setzen)
+            if not ip_blocked:
+                source.last_run_entries = new
 
         if ip_blocked:
             if source:
@@ -227,12 +230,18 @@ class DoeCrawler:
                 duration_ms=elapsed,
             ))
         else:
+            # Wenn nach DAYS_BACK Tagen 0 Einträge: als warn loggen (mögliche Pfadänderung)
+            level = "info" if processed > 0 else "warn"
             if source:
                 source.status = "ok" if processed > 0 else source.status
             db.add(CrawlLog(
                 source_id=source.id if source else None,
-                level="info",
-                message=f"DÖE: {processed} processed, {new} new",
+                level=level,
+                message=(
+                    f"DÖE: {processed} processed, {new} new"
+                    if processed > 0
+                    else "DÖE: 0 Einträge abgerufen — API-Pfad oder Datenformat prüfen"
+                ),
                 entries_processed=processed,
                 entries_new=new,
                 duration_ms=elapsed,

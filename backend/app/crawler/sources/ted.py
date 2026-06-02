@@ -80,8 +80,14 @@ class TedCrawler:
         processed = new = 0
         consecutive_errors = 0
 
+        requests_log: list[dict] = []
+        total_fetched = 0
+        total_parse_errors = 0
+        pages_done = 0
+
         async with httpx.AsyncClient(timeout=30) as client:
             for page in range(1, MAX_PAGES + 1):
+                req_t0 = time.monotonic()
                 try:
                     r = await client.post(
                         f"{API_BASE}/notices/search",
@@ -92,9 +98,21 @@ class TedCrawler:
                         },
                         headers={"Content-Type": "application/json", "Accept": "application/json"},
                     )
+                    req_ms = int((time.monotonic() - req_t0) * 1000)
                     r.raise_for_status()
                     data = r.json()
+                    notices = data.get("notices") or data.get("items") or data.get("results") or []
+                    requests_log.append({
+                        "page": page, "status": r.status_code, "ms": req_ms,
+                        "notices_in_response": len(notices),
+                        "api_total": data.get("total", data.get("totalNotices", data.get("totalElements"))),
+                    })
                 except Exception as e:
+                    req_ms = int((time.monotonic() - req_t0) * 1000)
+                    requests_log.append({
+                        "page": page, "status": getattr(getattr(e, "response", None), "status_code", None),
+                        "ms": req_ms, "error": type(e).__name__,
+                    })
                     consecutive_errors += 1
                     if consecutive_errors >= 3:
                         if source:
@@ -104,20 +122,26 @@ class TedCrawler:
                     continue
 
                 consecutive_errors = 0
-                notices = data.get("notices") or data.get("items") or data.get("results") or []
+                pages_done += 1
+
                 if page == 1 and not notices:
                     api_total = data.get("total", data.get("totalNotices", data.get("totalElements", "unbekannt")))
                     if source:
                         source.status = "warn"
-                        db.add(CrawlLog(source_id=source.id, level="warn",
-                                        message=f"TED: Seite 1 leer (API meldet {api_total} Treffer) — Query prüfen: {_SEARCH_QUERY}"))
+                        db.add(CrawlLog(
+                            source_id=source.id, level="warn",
+                            message=f"TED: Seite 1 leer (API meldet {api_total} Treffer) — Query prüfen: {_SEARCH_QUERY}",
+                            details={"requests": requests_log, "api_total": api_total},
+                        ))
                         await db.commit()
                     break
 
+                total_fetched += len(notices)
                 page_parsed = 0
                 for notice in notices:
                     norm = self._parse(notice)
                     if not norm:
+                        total_parse_errors += 1
                         continue
                     _, is_new = await resolve(norm, db)
                     processed += 1
@@ -125,11 +149,17 @@ class TedCrawler:
                     if is_new:
                         new += 1
 
+                # Wenn alle Notices auf Seite 1 nicht parsbar: Strukturfehler loggen
                 if notices and page_parsed == 0 and page == 1:
+                    sample_keys = list(notices[0].keys())[:15] if notices else []
                     if source:
                         source.status = "warn"
-                        db.add(CrawlLog(source_id=source.id, level="warn",
-                                        message=f"TED: {len(notices)} Notices abgerufen, aber keines geparst — Antwortstruktur prüfen: {list(notices[0].keys())[:10]}"))
+                        db.add(CrawlLog(
+                            source_id=source.id, level="warn",
+                            message=f"TED: {len(notices)} Notices erhalten, keines parsbar — Antwortstruktur prüfen",
+                            details={"requests": requests_log, "sample_keys": sample_keys,
+                                     "sample_title_field": notices[0].get("title") if notices else None},
+                        ))
                         await db.commit()
                     break
 
@@ -140,15 +170,20 @@ class TedCrawler:
 
         elapsed = int((time.monotonic() - start) * 1000)
         level = "warn" if (source and source.status == "warn") else "info"
-        log = CrawlLog(
+        db.add(CrawlLog(
             source_id=source.id if source else None,
             level=level,
             message=f"TED crawl: {processed} processed, {new} new",
             entries_processed=processed,
             entries_new=new,
             duration_ms=elapsed,
-        )
-        db.add(log)
+            details={
+                "pages": pages_done,
+                "fetched": total_fetched,
+                "parse_errors": total_parse_errors,
+                "requests": requests_log,
+            },
+        ))
         if source:
             source.last_run_at = datetime.now(timezone.utc)
             source.last_run_entries = new

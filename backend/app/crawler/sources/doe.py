@@ -136,22 +136,27 @@ def _parse_ocds_release(release: dict) -> NormalizedTender | None:
     )
 
 
-def _releases_from_zip(zip_bytes: bytes) -> list[dict]:
-    """Extrahiert OCDS-Releases aus der gelieferten ZIP-Datei."""
+def _releases_from_zip(zip_bytes: bytes) -> tuple[list[dict], int, int]:
+    """Extrahiert OCDS-Releases aus der ZIP-Datei.
+    Gibt (releases, files_count, parse_errors) zurück.
+    """
     releases: list[dict] = []
+    files_count = 0
+    parse_errors = 0
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             for name in zf.namelist():
                 if not name.lower().endswith(".json"):
                     continue
+                files_count += 1
                 try:
                     data = json.loads(zf.read(name))
                 except Exception:
+                    parse_errors += 1
                     continue
                 if isinstance(data, list):
                     releases.extend(data)
                 elif isinstance(data, dict):
-                    # OCDS Release-Package oder einzelnes Release
                     found = False
                     for key in ("releases", "records", "items"):
                         if isinstance(data.get(key), list):
@@ -161,8 +166,8 @@ def _releases_from_zip(zip_bytes: bytes) -> list[dict]:
                     if not found and (data.get("tender") or data.get("ocid")):
                         releases.append(data)
     except zipfile.BadZipFile:
-        pass
-    return releases
+        parse_errors += 1
+    return releases, files_count, parse_errors
 
 
 class DoeCrawler:
@@ -177,32 +182,37 @@ class DoeCrawler:
         start = time.monotonic()
         processed = new = 0
 
-        # Letzten DAYS_BACK Tage abrufen (heute und gestern, für Überlappung)
         days = [
             (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
             for i in range(DAYS_BACK)
         ]
 
         ip_blocked = False
+        days_log: list[dict] = []
+
         async with httpx.AsyncClient(timeout=120, headers=_HEADERS, follow_redirects=True) as client:
             for day in days:
-                releases, status = await self._fetch_day(client, day)
+                releases, day_stats, status = await self._fetch_day(client, day)
+                days_log.append({"day": day, "status": status, **day_stats})
 
                 if status == "blocked":
                     ip_blocked = True
                     break
                 if status == "error":
                     break
-                # status == "ok" (auch wenn 0 Releases, z.B. Wochenende/Feiertag)
 
+                day_ocds_errors = 0
                 for release in releases:
                     norm = _parse_ocds_release(release)
                     if not norm:
+                        day_ocds_errors += 1
                         continue
                     _, is_new = await resolve(norm, db)
                     processed += 1
                     if is_new:
                         new += 1
+
+                days_log[-1]["ocds_parse_errors"] = day_ocds_errors
 
                 await db.commit()
                 await asyncio.sleep(1.0)
@@ -210,10 +220,10 @@ class DoeCrawler:
         elapsed = int((time.monotonic() - start) * 1000)
         if source:
             source.last_run_at = datetime.now(timezone.utc)
-            # last_run_entries nur bei echten Ergebnissen überschreiben,
-            # nicht bei IP-Block (würde letzten erfolgreichen Zähler auf 0 setzen)
             if not ip_blocked:
                 source.last_run_entries = new
+
+        details = {"days": days_log}
 
         if ip_blocked:
             if source:
@@ -228,9 +238,9 @@ class DoeCrawler:
                 entries_processed=0,
                 entries_new=0,
                 duration_ms=elapsed,
+                details=details,
             ))
         else:
-            # Wenn nach DAYS_BACK Tagen 0 Einträge: als warn loggen (mögliche Pfadänderung)
             level = "info" if processed > 0 else "warn"
             if source:
                 source.status = "ok" if processed > 0 else source.status
@@ -245,35 +255,49 @@ class DoeCrawler:
                 entries_processed=processed,
                 entries_new=new,
                 duration_ms=elapsed,
+                details=details,
             ))
         await db.commit()
         return new
 
-    async def _fetch_day(self, client: httpx.AsyncClient, day: str) -> tuple[list[dict], str]:
-        """Lädt alle Notices eines Tages als ocds.zip. Gibt (releases, status) zurück.
-        status: 'ok' | 'blocked' | 'error'
+    async def _fetch_day(self, client: httpx.AsyncClient, day: str) -> tuple[list[dict], dict, str]:
+        """Lädt alle Notices eines Tages als ocds.zip.
+        Gibt (releases, stats_dict, status) zurück. status: 'ok' | 'blocked' | 'error'
         """
+        url = f"{API_BASE}{ENDPOINT}"
+        t0 = time.monotonic()
         try:
-            r = await client.get(
-                f"{API_BASE}{ENDPOINT}",
-                params={"pubDay": day, "format": "ocds.zip"},
-            )
+            r = await client.get(url, params={"pubDay": day, "format": "ocds.zip"})
+            ms = int((time.monotonic() - t0) * 1000)
+            stats: dict = {"http_status": r.status_code, "ms": ms}
+
             if r.status_code == 403:
-                return [], "blocked"
+                return [], stats, "blocked"
             if r.status_code == 404:
-                # Kein Export für diesen Tag (Wochenende / kein Datensatz)
-                return [], "ok"
+                stats["note"] = "kein Export für diesen Tag (Wochenende / kein Datensatz)"
+                return [], stats, "ok"
             r.raise_for_status()
 
             content_type = r.headers.get("content-type", "")
+            stats["content_type"] = content_type
+            stats["size_bytes"] = len(r.content)
+
             if "zip" in content_type or r.content[:4] == b"PK\x03\x04":
-                return _releases_from_zip(r.content), "ok"
-            # Unerwartetes Format — ignorieren, aber nicht als Fehler werten
-            return [], "ok"
+                releases, files_count, zip_errors = _releases_from_zip(r.content)
+                stats["zip_files"] = files_count
+                stats["zip_parse_errors"] = zip_errors
+                stats["releases_in_zip"] = len(releases)
+                return releases, stats, "ok"
+
+            stats["note"] = f"unerwartetes Format: {content_type}"
+            return [], stats, "ok"
 
         except httpx.HTTPStatusError as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            stats = {"http_status": e.response.status_code, "ms": ms}
             if e.response.status_code == 403:
-                return [], "blocked"
-            return [], "error"
-        except Exception:
-            return [], "error"
+                return [], stats, "blocked"
+            return [], stats, "error"
+        except Exception as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            return [], {"ms": ms, "error": type(e).__name__}, "error"

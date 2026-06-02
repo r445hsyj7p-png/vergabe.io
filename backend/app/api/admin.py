@@ -147,6 +147,7 @@ async def crawlers_live(db: AsyncSession = Depends(get_db), _: str = Depends(req
             "last_log_new": lg.entries_new if lg else None,
             "last_log_level": lg.level if lg else None,
             "last_log_message": lg.message if lg else None,
+            "last_log_details": lg.details if lg else None,
             "last_log_at": lg.created_at.isoformat() if lg else None,
         })
     return result

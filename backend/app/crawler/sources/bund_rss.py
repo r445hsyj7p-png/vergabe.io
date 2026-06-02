@@ -56,13 +56,18 @@ class BundRssCrawler:
         start = time.monotonic()
         processed = new = 0
 
-        feed = await self._fetch_feed(source, db)
+        requests_log: list[dict] = []
+        feed = await self._fetch_feed(source, db, requests_log)
         if feed is None:
             return 0
+
+        items_in_feed = len(feed.find_all("item"))
+        filtered = 0
 
         for item in feed.find_all("item"):
             norm = self._parse_item(item)
             if not norm:
+                filtered += 1
                 continue
             _, is_new = await resolve(norm, db)
             processed += 1
@@ -78,6 +83,11 @@ class BundRssCrawler:
             entries_processed=processed,
             entries_new=new,
             duration_ms=elapsed,
+            details={
+                "items_in_feed": items_in_feed,
+                "filtered": filtered,
+                "requests": requests_log,
+            },
         ))
         if source:
             source.last_run_at = datetime.now(timezone.utc)
@@ -86,30 +96,42 @@ class BundRssCrawler:
         await db.commit()
         return new
 
-    async def _fetch_feed(self, source, db):
+    async def _fetch_feed(self, source, db, requests_log: list[dict]):
         """Versucht RSS-Kandidaten der Reihe nach, gibt BeautifulSoup zurück oder None."""
         headers = {"User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)"}
         last_error: str = "Kein Feed erreichbar"
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             for url in _RSS_CANDIDATES:
+                t0 = time.monotonic()
                 try:
                     r = await client.get(url, headers=headers)
+                    ms = int((time.monotonic() - t0) * 1000)
+                    has_feed = "<item" in r.text or "<rss" in r.text
+                    requests_log.append({
+                        "url": url, "http_status": r.status_code, "ms": ms,
+                        "has_feed_content": has_feed,
+                    })
                     if r.status_code == 403:
-                        # IP-Block auf dieser URL — nächsten Kandidaten versuchen
                         last_error = f"Zugriff verweigert (403) auf {url} — nächste URL wird versucht"
                         continue
-                    if r.status_code == 200 and ("<item" in r.text or "<rss" in r.text):
+                    if r.status_code == 200 and has_feed:
                         return BeautifulSoup(r.text, "xml")
                     last_error = f"HTTP {r.status_code} von {url}"
                 except Exception as exc:
+                    ms = int((time.monotonic() - t0) * 1000)
+                    requests_log.append({"url": url, "ms": ms, "error": type(exc).__name__})
                     last_error = f"{type(exc).__name__} bei {url}: {exc}"
                     continue
+
         # Alle Kandidaten erschöpft
         if source:
             source.status = "warn"
             source.last_run_at = datetime.now(timezone.utc)
-            db.add(CrawlLog(source_id=source.id, level="warn",
-                            message=f"Bund RSS: {last_error}"))
+            db.add(CrawlLog(
+                source_id=source.id, level="warn",
+                message=f"Bund RSS: {last_error}",
+                details={"requests": requests_log},
+            ))
             await db.commit()
         return None
 

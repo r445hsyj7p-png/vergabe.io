@@ -194,6 +194,7 @@ class CrawlLog(Base):
     entries_processed: Mapped[int] = mapped_column(Integer, default=0)
     entries_new: Mapped[int] = mapped_column(Integer, default=0)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     source: Mapped[Optional["Source"]] = relationship(back_populates="crawl_logs")

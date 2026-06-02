@@ -37,13 +37,11 @@ _PUB_PATHS = [
 ]
 
 
-
 def _scrape_netserver_html(html: str, base_url: str) -> list[NormalizedTender]:
     """Parst eine NetServer-Bekanntmachungsübersicht."""
     soup = BeautifulSoup(html, "lxml")
     results = []
 
-    # NetServer listet Ausschreibungen in Tabellen oder <article>/<li> Elementen
     rows = (
         soup.find_all("tr", class_=re.compile(r"tender|ausschreib|result", re.I)) or
         soup.find_all("article") or
@@ -114,29 +112,40 @@ class SachsenCrawler:
         start = time.monotonic()
         processed = new = 0
         found = False
-
         ip_blocked = False
+
+        requests_log: list[dict] = []
+
         async with httpx.AsyncClient(timeout=20, headers=_HEADERS, follow_redirects=True) as client:
             for base in _NETSERVER_BASES:
                 if ip_blocked:
                     break
                 for path in _PUB_PATHS:
+                    url = f"{base}{path}"
+                    t0 = time.monotonic()
                     try:
-                        r = await client.get(f"{base}{path}")
+                        r = await client.get(url)
+                        ms = int((time.monotonic() - t0) * 1000)
+                        entry: dict = {"url": url, "http_status": r.status_code, "ms": ms}
+                        requests_log.append(entry)
+
                         if r.status_code == 403:
-                            msg = f"Sachsen: Zugriff verweigert (403) — Server-IP blockiert"
                             if source:
                                 source.status = "warn"
-                                db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+                                db.add(CrawlLog(
+                                    source_id=source.id, level="warn",
+                                    message="Sachsen: Zugriff verweigert (403) — Server-IP blockiert",
+                                    details={"requests": requests_log},
+                                ))
                                 await db.commit()
                             ip_blocked = True
                             break
-                        if r.status_code != 200:
-                            continue
-                        if len(r.text) < 500:
+                        if r.status_code != 200 or len(r.text) < 500:
+                            entry["note"] = f"übersprungen (len={len(r.text)})"
                             continue
 
                         tenders = _scrape_netserver_html(r.text, base)
+                        entry["tenders_scraped"] = len(tenders)
                         if not tenders:
                             continue
 
@@ -148,18 +157,22 @@ class SachsenCrawler:
                                 new += 1
                         await db.commit()
                         break
-                    except Exception:
+
+                    except Exception as exc:
+                        ms = int((time.monotonic() - t0) * 1000)
+                        requests_log.append({"url": url, "ms": ms, "error": type(exc).__name__})
                         continue
                 if found:
                     break
 
-        if not found and not source:
-            pass
-        elif not found:
-            msg = "Sachsen: Kein erreichbarer NetServer-Endpunkt — IP evtl. blockiert"
+        if not found and not ip_blocked:
             if source:
                 source.status = "warn"
-                db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+                db.add(CrawlLog(
+                    source_id=source.id, level="warn",
+                    message="Sachsen: Kein erreichbarer NetServer-Endpunkt — IP evtl. blockiert",
+                    details={"requests": requests_log},
+                ))
                 await db.commit()
 
         elapsed = int((time.monotonic() - start) * 1000)
@@ -175,6 +188,7 @@ class SachsenCrawler:
             entries_processed=processed,
             entries_new=new,
             duration_ms=elapsed,
+            details={"requests": requests_log},
         ))
         await db.commit()
         return new

@@ -143,6 +143,7 @@ class CrawlLogOut(BaseModel):
     entries_processed: int
     entries_new: int
     duration_ms: Optional[int]
+    details: Optional[dict] = None
     created_at: datetime
     model_config = {"from_attributes": True}
 

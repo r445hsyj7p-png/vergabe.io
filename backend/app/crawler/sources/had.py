@@ -32,13 +32,11 @@ _SEARCH_URLS = [
 ]
 
 
-
 def _scrape_had(html: str) -> list[dict]:
     """Parst HAD-Suchergebnisseite."""
     soup = BeautifulSoup(html, "lxml")
     items = []
 
-    # HAD listet Ausschreibungen in Tabellen oder divs mit Klassen wie 'result', 'tender', 'ausschreibung'
     rows = (
         soup.find_all("tr", class_=re.compile(r"result|ausschreib|tender", re.I)) or
         soup.find_all("div", class_=re.compile(r"result|ausschreib|tender|item", re.I)) or
@@ -83,30 +81,46 @@ class HadCrawler:
         seen_titles: set[str] = set()
         found = False
 
+        requests_log: list[dict] = []
+        total_scraped = 0
+        filtered = 0
+
+        ip_blocked = False
         async with httpx.AsyncClient(timeout=20, headers=_HEADERS, follow_redirects=True) as client:
             for url in _SEARCH_URLS:
+                t0 = time.monotonic()
                 try:
                     r = await client.get(url)
+                    ms = int((time.monotonic() - t0) * 1000)
+                    entry: dict = {"url": url, "http_status": r.status_code, "ms": ms}
+                    requests_log.append(entry)
+
                     if r.status_code == 403:
-                        msg = "HAD: Zugriff verweigert (403) — Server-IP blockiert"
+                        ip_blocked = True
                         if source:
                             source.status = "warn"
-                            db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+                            db.add(CrawlLog(
+                                source_id=source.id, level="warn",
+                                message="HAD: Zugriff verweigert (403) — Server-IP blockiert",
+                                details={"requests": requests_log},
+                            ))
                             await db.commit()
                         break
-                    if r.status_code != 200:
-                        continue
-                    if len(r.text) < 500:
+                    if r.status_code != 200 or len(r.text) < 500:
+                        entry["note"] = f"übersprungen (len={len(r.text)})"
                         continue
 
                     items = _scrape_had(r.text)
+                    entry["items_scraped"] = len(items)
                     if not items:
                         continue
 
                     found = True
+                    total_scraped += len(items)
                     for item in items:
                         combined = f"{item['title']} {item.get('text', '')}"
                         if not is_it_relevant(combined):
+                            filtered += 1
                             continue
                         key = item["title"][:100]
                         if key in seen_titles:
@@ -137,16 +151,20 @@ class HadCrawler:
                             new += 1
 
                     await db.commit()
-                    # Weiter mit nächster URL (alle CPV-Kategorien abdecken)
 
-                except Exception:
+                except Exception as exc:
+                    ms = int((time.monotonic() - t0) * 1000)
+                    requests_log.append({"url": url, "ms": ms, "error": type(exc).__name__})
                     continue
 
-        if not found:
-            msg = "HAD: Kein erreichbarer Endpunkt — bitte https://www.had.de manuell prüfen"
+        if not found and not ip_blocked:
             if source:
                 source.status = "warn"
-                db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+                db.add(CrawlLog(
+                    source_id=source.id, level="warn",
+                    message="HAD: Kein erreichbarer Endpunkt — bitte https://www.had.de manuell prüfen",
+                    details={"requests": requests_log},
+                ))
                 await db.commit()
 
         elapsed = int((time.monotonic() - start) * 1000)
@@ -162,6 +180,11 @@ class HadCrawler:
             entries_processed=processed,
             entries_new=new,
             duration_ms=elapsed,
+            details={
+                "scraped": total_scraped,
+                "filtered": filtered,
+                "requests": requests_log,
+            },
         ))
         await db.commit()
         return new

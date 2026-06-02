@@ -123,23 +123,37 @@ class NrwCrawler:
         start = time.monotonic()
         processed = new = 0
 
+        requests_log: list[dict] = []
+
         async with httpx.AsyncClient(timeout=30, headers=_HEADERS, follow_redirects=True) as client:
-            items = await self._fetch_items(client, source, db)
+            items = await self._fetch_items(client, requests_log)
 
         if items is None:
             elapsed = int((time.monotonic() - start) * 1000)
             if source:
                 source.status = "warn"
                 source.last_run_at = datetime.now(timezone.utc)
-            db.add(CrawlLog(source_id=source.id if source else None, level="warn",
-                            message="NRW: Keine Daten abgerufen — CKAN und Legacy-API nicht erreichbar",
-                            entries_processed=0, entries_new=0, duration_ms=elapsed))
+            db.add(CrawlLog(
+                source_id=source.id if source else None,
+                level="warn",
+                message="NRW: Keine Daten abgerufen — CKAN und Legacy-API nicht erreichbar",
+                entries_processed=0, entries_new=0, duration_ms=elapsed,
+                details={"requests": requests_log},
+            ))
             await db.commit()
             return 0
+
+        total_fetched = len(items)
+        parse_errors = 0
+        filtered = 0
 
         for item in items:
             norm = _parse_item(item)
             if not norm:
+                if _get(item, *_FIELD_TITLE):
+                    filtered += 1
+                else:
+                    parse_errors += 1
                 continue
             _, is_new = await resolve(norm, db)
             processed += 1
@@ -158,24 +172,31 @@ class NrwCrawler:
             entries_processed=processed,
             entries_new=new,
             duration_ms=elapsed,
+            details={
+                "fetched": total_fetched,
+                "parse_errors": parse_errors,
+                "filtered": filtered,
+                "requests": requests_log,
+            },
         ))
         await db.commit()
         return new
 
-    async def _fetch_items(self, client: httpx.AsyncClient, source, db: AsyncSession) -> list[dict] | None:
+    async def _fetch_items(self, client: httpx.AsyncClient, requests_log: list[dict]) -> list[dict] | None:
         """Versucht CKAN zuerst, dann Legacy-REST."""
-        # 1. CKAN Open.NRW
-        items = await self._fetch_via_ckan(client)
+        items = await self._fetch_via_ckan(client, requests_log)
         if items is not None:
             return items
 
-        # 2. Legacy REST (daten.vergabe.nrw.de — möglicherweise reaktiviert)
         date_from = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
         for base in _LEGACY_API_CANDIDATES:
+            t0 = time.monotonic()
             try:
                 r = await client.get(base, params={"page": 0, "size": PAGE_SIZE,
                                                     "sort": "veroeffentlichungsdatum,desc",
                                                     "filter[veroeffentlichungsdatum][$gte]": date_from})
+                ms = int((time.monotonic() - t0) * 1000)
+                requests_log.append({"url": base, "http_status": r.status_code, "ms": ms, "source": "legacy"})
                 if r.status_code == 200:
                     data = r.json()
                     legacy_items: list = []
@@ -189,60 +210,80 @@ class NrwCrawler:
                     elif isinstance(data, list):
                         legacy_items = data
                     if legacy_items:
+                        requests_log[-1]["items_found"] = len(legacy_items)
                         return legacy_items
-            except Exception:
+            except Exception as e:
+                ms = int((time.monotonic() - t0) * 1000)
+                requests_log.append({"url": base, "ms": ms, "error": type(e).__name__, "source": "legacy"})
                 continue
 
         return None
 
-    async def _fetch_via_ckan(self, client: httpx.AsyncClient) -> list[dict] | None:
+    async def _fetch_via_ckan(self, client: httpx.AsyncClient, requests_log: list[dict]) -> list[dict] | None:
         """Lädt aktuelle Ausschreibungen über die CKAN Open.NRW API."""
+        ckan_url = f"{_CKAN_API}/package_show"
+        t0 = time.monotonic()
         try:
-            # Ressourcen-URLs aus Dataset-Metadaten holen
-            r = await client.get(f"{_CKAN_API}/package_show",
-                                  params={"id": _CKAN_DATASET_ID})
+            r = await client.get(ckan_url, params={"id": _CKAN_DATASET_ID})
+            ms = int((time.monotonic() - t0) * 1000)
+            requests_log.append({"url": ckan_url, "http_status": r.status_code, "ms": ms, "source": "ckan_meta"})
             if r.status_code != 200:
                 return None
 
             resources = r.json().get("result", {}).get("resources", [])
             if not resources:
+                requests_log[-1]["note"] = "keine Ressourcen im Dataset"
                 return None
 
-            # JSON-Ressourcen bevorzugen; CSV als Fallback
             json_resources = [res for res in resources if res.get("format", "").upper() == "JSON"]
             csv_resources = [res for res in resources if res.get("format", "").upper() == "CSV"]
-            candidates = json_resources or csv_resources
-            if not candidates:
-                candidates = resources  # beliebiges Format versuchen
+            candidates = json_resources or csv_resources or resources
+
+            requests_log[-1]["resources_total"] = len(resources)
+            requests_log[-1]["resources_json"] = len(json_resources)
+            requests_log[-1]["resources_csv"] = len(csv_resources)
 
             for res in candidates[:3]:
                 url = res.get("url")
                 if not url:
                     continue
+                t1 = time.monotonic()
                 try:
                     r2 = await client.get(url, timeout=60)
+                    ms2 = int((time.monotonic() - t1) * 1000)
+                    ct = r2.headers.get("content-type", "")
+                    entry: dict = {
+                        "url": url, "http_status": r2.status_code, "ms": ms2,
+                        "content_type": ct, "size_bytes": len(r2.content), "source": "ckan_resource",
+                    }
+                    requests_log.append(entry)
                     if r2.status_code != 200:
                         continue
-                    ct = r2.headers.get("content-type", "")
                     if "json" in ct or url.endswith(".json"):
                         data = r2.json()
                         if isinstance(data, list):
+                            entry["items_found"] = len(data)
                             return data
                         for key in ("result", "records", "data", "items", "results"):
                             if isinstance(data.get(key), list):
+                                entry["items_found"] = len(data[key])
                                 return data[key]
                     elif "csv" in ct or url.endswith(".csv"):
-                        return self._parse_csv(r2.text)
-                except Exception:
+                        items = self._parse_csv(r2.text)
+                        entry["items_found"] = len(items)
+                        return items
+                except Exception as e:
+                    ms2 = int((time.monotonic() - t1) * 1000)
+                    requests_log.append({"url": url, "ms": ms2, "error": type(e).__name__, "source": "ckan_resource"})
                     continue
 
-        except Exception:
-            pass
+        except Exception as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            requests_log.append({"url": ckan_url, "ms": ms, "error": type(e).__name__, "source": "ckan_meta"})
         return None
 
     @staticmethod
     def _parse_csv(text: str) -> list[dict]:
-        """Parst CSV-Text in eine Liste von Dicts."""
         import csv, io
         reader = csv.DictReader(io.StringIO(text))
         return list(reader)

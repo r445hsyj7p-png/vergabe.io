@@ -113,19 +113,25 @@ class BerlinCrawler:
         start = time.monotonic()
         processed = new = 0
 
-        feed_xml = await self._fetch_feed(client_headers=_HEADERS, source=source, db=db)
+        requests_log: list[dict] = []
+        feed_xml = await self._fetch_feed(client_headers=_HEADERS, source=source, db=db, requests_log=requests_log)
         if feed_xml is None:
             elapsed = int((time.monotonic() - start) * 1000)
             db.add(CrawlLog(source_id=source.id if source else None, level="warn",
                             message="Berlin: Feed nicht erreichbar — 0 processed, 0 new",
-                            entries_processed=0, entries_new=0, duration_ms=elapsed))
+                            entries_processed=0, entries_new=0, duration_ms=elapsed,
+                            details={"requests": requests_log}))
             await db.commit()
             return 0
 
         feed = BeautifulSoup(feed_xml, "xml")
-        for item in feed.find_all("item") + feed.find_all("entry"):
+        all_items = feed.find_all("item") + feed.find_all("entry")
+        items_in_feed = len(all_items)
+        filtered = 0
+        for item in all_items:
             norm = _parse_item(item)
             if not norm:
+                filtered += 1
                 continue
             _, is_new = await resolve(norm, db)
             processed += 1
@@ -145,36 +151,51 @@ class BerlinCrawler:
             entries_processed=processed,
             entries_new=new,
             duration_ms=elapsed,
+            details={"items_in_feed": items_in_feed, "filtered": filtered, "requests": requests_log},
         ))
         await db.commit()
         return new
 
-    async def _fetch_feed(self, client_headers: dict, source, db: AsyncSession) -> str | None:
+    async def _fetch_feed(self, client_headers: dict, source, db: AsyncSession, requests_log: list[dict]) -> str | None:
         async with httpx.AsyncClient(timeout=20, headers=client_headers) as client:
             # Zuerst Haupt-Seite parsen und RSS-Link suchen
             try:
+                _t0 = time.monotonic()
                 r = await client.get(_BEKANNTMACHUNGEN_URL)
+                requests_log.append({"url": _BEKANNTMACHUNGEN_URL, "http_status": r.status_code, "ms": int((time.monotonic() - _t0) * 1000)})
                 if r.status_code == 200:
                     soup = BeautifulSoup(r.text, "lxml")
                     for tag in soup.find_all(["a", "link"]):
                         href = tag.get("href", "") or tag.get("href", "")
                         if href and ("rss" in href.lower() or "feed" in href.lower() or href.endswith(".xml")):
                             rss_url = href if href.startswith("http") else _BASE + href
-                            rss_r = await client.get(rss_url)
+                            try:
+                                _t1 = time.monotonic()
+                                rss_r = await client.get(rss_url)
+                                requests_log.append({"url": rss_url, "http_status": rss_r.status_code, "ms": int((time.monotonic() - _t1) * 1000)})
+                            except Exception as exc:
+                                _ms = int((time.monotonic() - _t1) * 1000)
+                                requests_log.append({"url": rss_url, "ms": _ms, "error": type(exc).__name__})
+                                continue
                             if rss_r.status_code == 200 and ("<rss" in rss_r.text or "<feed" in rss_r.text):
                                 return rss_r.text
-            except Exception:
-                pass
+            except Exception as exc:
+                _ms = int((time.monotonic() - _t0) * 1000)
+                requests_log.append({"url": _BEKANNTMACHUNGEN_URL, "ms": _ms, "error": type(exc).__name__})
 
             # Candidate-URLs durchprobieren
             for url in _RSS_CANDIDATES:
                 try:
+                    _t = time.monotonic()
                     r = await client.get(url)
+                    requests_log.append({"url": url, "http_status": r.status_code, "ms": int((time.monotonic() - _t) * 1000)})
                     if r.status_code == 200 and ("<rss" in r.text or "<feed" in r.text or "<item" in r.text):
                         return r.text
                     if r.status_code == 403:
                         break  # IP-Block, nicht weiterversuchen
-                except Exception:
+                except Exception as exc:
+                    _ms = int((time.monotonic() - _t) * 1000)
+                    requests_log.append({"url": url, "ms": _ms, "error": type(exc).__name__})
                     continue
 
         msg = (
@@ -183,6 +204,6 @@ class BerlinCrawler:
         )
         if source:
             source.status = "warn"
-            db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+            db.add(CrawlLog(source_id=source.id, level="warn", message=msg, details={"requests": requests_log}))
             await db.commit()
         return None

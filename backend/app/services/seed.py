@@ -6,8 +6,14 @@ from ..models import Source, KomunenSource
 
 
 SOURCES = [
-    ("TED Europa", "ted", "api", "https://api.ted.europa.eu/v3", "TEDCrawler", 4),
-    ("service.bund.de", "bund", "rss", "https://www.service.bund.de", "BundRssCrawler", 2),
+    # name, slug, source_type, base_url, scraper_class, interval_hours
+    ("TED Europa",                        "ted",     "api",  "https://api.ted.europa.eu/v3",            "TedCrawler",      4),
+    ("service.bund.de",                   "bund",    "rss",  "https://www.service.bund.de",             "BundRssCrawler",  2),
+    ("Datenservice Öffentlicher Einkauf", "doe",     "api",  "https://www.oeffentlichevergabe.de",      "DoeCrawler",      6),
+    ("Vergabemarktplatz NRW",             "nrw",     "api",  "https://ckan.open.nrw.de",                "NrwCrawler",      6),
+    ("Vergabeplattform Berlin",           "berlin",  "rss",  "https://www.berlin.de/vergabeplattform",  "BerlinCrawler",   4),
+    ("eVergabe Sachsen",                  "sachsen", "html", "https://www.evergabe.sachsen.de",         "SachsenCrawler",  8),
+    ("HAD Hessen",                        "had",     "html", "https://www.had.de",                      "HadCrawler",      8),
 ]
 
 STARTER_KOMUNEN = [

@@ -26,9 +26,14 @@ PAGE_SIZE = 50
 MAX_PAGES = 20
 SLEEP_S = 1.0
 
-# TED v3 Expert-Search-Syntax: CPV-Divisionen für IT-Dienstleistungen
-# classification-cpv=72 deckt alle 72xxxxxxx ab; 48=Software, 73=F&E
-_SEARCH_QUERY = "classification-cpv IN (72, 48, 73)"
+# TED v3 Expert-Search-Syntax mit Lucene-Range für IT-CPV-Divisionen.
+# TED speichert CPV als 8-stellige Ganzzahl; IN(72) = kein Match, Range erforderlich.
+# 72xxxxxxx = IT-Dienstleistungen, 48xxxxxxx = Software, 73xxxxxxx = F&E
+_SEARCH_QUERY = (
+    "classification-cpv:[72000000 TO 72999999]"
+    " OR classification-cpv:[48000000 TO 48999999]"
+    " OR classification-cpv:[73000000 TO 73999999]"
+)
 
 # Felder die zurückgegeben werden sollen (TED v3 kebab-case Format)
 _FIELDS = [
@@ -93,7 +98,6 @@ class TedCrawler:
                             "fields": _FIELDS,
                             "page": page,
                             "limit": PAGE_SIZE,
-                            "scope": "ACTIVE",
                             "sortField": "publication-date",
                             "sortOrder": "DESC",
                             "checkQuerySyntax": False,

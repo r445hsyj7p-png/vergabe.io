@@ -9,10 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.database import AsyncSessionLocal
 from ...models import Source, CrawlLog
-from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes
+from ..pipeline.normalizer import NormalizedTender, extract_cpv_codes, is_it_relevant
 from ..pipeline.entity_resolution import resolve
 
-RSS_URL = "https://www.service.bund.de/Content/Globals/Functions/RSSFeed/RSSGenerator_Ausschreibungen.xml"
+# RSS-Feed-Kandidaten in absteigender Priorität.
+# service.bund.de bietet einen allgemeinen Feed + ggf. CPV-gefilterte Varianten.
+_RSS_CANDIDATES = [
+    # Allgemeiner Feed (alle Kategorien) — client-seitig gefiltert
+    "https://www.service.bund.de/Content/Globals/Functions/RSSFeed/RSSGenerator_Ausschreibungen.xml",
+    # Fallback: bund.de-Domain (gleiche Infrastruktur)
+    "https://www.bund.de/Content/Globals/Functions/RSSFeed/RSSGenerator_Ausschreibungen.xml",
+]
 
 _DE_MONTHS = {
     "januar": 1, "februar": 2, "märz": 3, "april": 4, "mai": 5, "juni": 6,
@@ -49,26 +56,8 @@ class BundRssCrawler:
         start = time.monotonic()
         processed = new = 0
 
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(RSS_URL, headers={"User-Agent": "vergabe.io/1.0"})
-                r.raise_for_status()
-                feed = BeautifulSoup(r.text, "xml")
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 403:
-                msg = "Bund RSS: Zugriff verweigert (403) — service.bund.de blockiert Anfragen von Server-IPs"
-            else:
-                msg = f"Bund RSS fetch failed: {e}"
-            if source:
-                source.status = "warn"
-                db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
-                await db.commit()
-            return 0
-        except Exception as e:
-            if source:
-                source.status = "error"
-                db.add(CrawlLog(source_id=source.id, level="error", message=f"Bund RSS fetch failed: {e}"))
-                await db.commit()
+        feed = await self._fetch_feed(source, db)
+        if feed is None:
             return 0
 
         for item in feed.find_all("item"):
@@ -97,6 +86,31 @@ class BundRssCrawler:
         await db.commit()
         return new
 
+    async def _fetch_feed(self, source, db):
+        """Versucht RSS-Kandidaten der Reihe nach, gibt BeautifulSoup zurück oder None."""
+        headers = {"User-Agent": "vergabe.io/1.0 (opendata@vergabe.io)"}
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            for url in _RSS_CANDIDATES:
+                try:
+                    r = await client.get(url, headers=headers)
+                    if r.status_code == 403:
+                        msg = "Bund RSS: Zugriff verweigert (403) — service.bund.de blockiert Server-IPs"
+                        if source:
+                            source.status = "warn"
+                            db.add(CrawlLog(source_id=source.id, level="warn", message=msg))
+                            await db.commit()
+                        return None
+                    if r.status_code == 200 and ("<item" in r.text or "<rss" in r.text):
+                        return BeautifulSoup(r.text, "xml")
+                except Exception:
+                    continue
+        if source:
+            source.status = "warn"
+            db.add(CrawlLog(source_id=source.id, level="warn",
+                            message="Bund RSS: Kein Feed erreichbar"))
+            await db.commit()
+        return None
+
     def _parse_item(self, item) -> NormalizedTender | None:
         title = item.find("title")
         title = title.get_text(strip=True) if title else None
@@ -117,12 +131,15 @@ class BundRssCrawler:
         except Exception:
             description = re.sub(r"<[^>]+>", " ", raw_desc).strip()[:2000]
 
+        cpv_codes = extract_cpv_codes(raw_desc)
+        combined = f"{title} {description}"
+        if not is_it_relevant(combined, cpv_codes=cpv_codes):
+            return None
+
         authority = None
         auth_match = re.search(r"Auftraggeber[:\s]+(.+?)(?:\n|<)", raw_desc)
         if auth_match:
             authority = auth_match.group(1).strip()[:300]
-
-        cpv_codes = extract_cpv_codes(raw_desc)
 
         deadline = None
         for pattern in [r"Angebotsfrist[:\s]+([^\n<]+)", r"Einreichungsfrist[:\s]+([^\n<]+)"]:
